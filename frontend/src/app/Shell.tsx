@@ -3,6 +3,8 @@ import { useMutation, useQuery, type UseQueryResult } from '@tanstack/react-quer
 import { Link, NavLink, Navigate, Outlet, Route, Routes, matchPath, useLocation, useNavigate } from 'react-router';
 import { api, type Session } from '../shared/api';
 import { Button, StatePanel } from '../shared/ui';
+import { EmailAuth } from '../features/auth/EmailAuth';
+import { Verification, VerificationRequired } from '../features/auth/Verification';
 import { authRoutes, safeReturnPath, sessionNotice, workspaceRoutes } from './routes';
 
 function FatalPage() {
@@ -56,7 +58,7 @@ function RequireSession({ session, signingOut }: { session: UseQueryResult<Sessi
     action={<Button loading={session.isFetching} onClick={() => { void session.refetch(); }}>Try again</Button>} />;
   if (!session.data) return <StatePanel state="loading" title="Checking your session"
     description="Your workspace will open when the check is complete." />;
-  return <Outlet />;
+  return !session.data.email_verified && !matchPath('/settings', location.pathname) ? <VerificationRequired /> : <Outlet />;
 }
 
 function AuthPage({ title, session }: { title: string; session: Session | null }) {
@@ -71,8 +73,11 @@ function AuthPage({ title, session }: { title: string; session: Session | null }
     {notice === 'logout_failed' && <StatePanel state="error" title="Sign out could not be confirmed"
       description="Your local workspace was cleared. Reload to check your session before trying again."
       action={<a href="/login">Check session again</a>} />}
-    <StatePanel state="empty" title={`${title} is not available yet`}
-      description="Account forms will be available here soon." />
+    {matchPath('/verify-email', location.pathname) ? <Verification />
+      : matchPath('/login', location.pathname) ? <EmailAuth key="login" mode="login" />
+      : matchPath('/register', location.pathname) ? <EmailAuth key="register" mode="register" />
+      : <StatePanel state="empty" title={`${title} is not available yet`}
+        description="Account forms will be available here soon." />}
   </>;
 }
 
