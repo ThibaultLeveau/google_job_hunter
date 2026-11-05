@@ -16,6 +16,9 @@ const failure = (status: number, fields: { field: string; message: string }[] = 
   HttpResponse.json({ code: 'fixture', message: 'Request failed.', field_errors: fields,
     request_id: 'bcb2f310-f4a5-4a2d-9871-a220704e5da8' }, { status, headers });
 beforeEach(() => {
+  sessionStorage.clear();
+  server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })));
+  api.queryClient.setQueryDefaults(['auth-providers'], { retry: false });
   current = null; api.clearSession(); api.queryClient.clear();
   api.queryClient.setQueryDefaults(sessionKey, { retry: false });
   server.use(http.get('http://localhost/api/auth/me', () => current ? HttpResponse.json(current) : failure(401)));
@@ -242,4 +245,214 @@ test('accepts another fragment link in the same page after clearing the previous
   await user.click(await screen.findByRole('button', { name: 'Verify email' }));
   await waitFor(() => { expect(seen).toEqual([{ token }, { token: 'n'.repeat(43) }]); });
   expect(window.location.hash).toBe('');
+});
+
+test('offers Google only after configured availability is confirmed, with an explicit retry on failure', async () => {
+  const user = userEvent.setup(); let release: () => void = () => undefined;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  server.use(http.get('http://localhost/api/auth/providers', async () => { await pending; return failure(503); }));
+  mount('/login'); expect(screen.getByText('Checking sign-in options…')).toBeVisible();
+  expect(screen.queryByRole('link', { name: 'Sign in with Google' })).not.toBeInTheDocument();
+  release(); await screen.findByText('Google sign-in availability could not be checked.');
+  server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: true })));
+  await user.click(screen.getByRole('button', { name: 'Retry Google availability' }));
+  expect(await screen.findByRole('link', { name: 'Sign in with Google' })).toHaveAttribute('href', '/api/auth/google/start');
+});
+
+test.each(['/jobs?filter=saved', '//outside.example', '/login', null])('stores only a safe Google return path: %s', async target => {
+  server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: true })));
+  mount(`/login${target ? `?returnTo=${encodeURIComponent(target)}` : ''}`);
+  const link = await screen.findByRole('link', { name: 'Sign in with Google' });
+  link.addEventListener('click', event => { event.preventDefault(); }); fireEvent.click(link);
+  expect(sessionStorage.getItem('job-hunter.google-return')).toBe(target?.startsWith('/jobs') ? target : '/profile');
+});
+
+test('keeps Google navigation available when storage is blocked and explains leaving a verification link', async () => {
+  server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: true })));
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Unavailable'); });
+  mount(`/verify-email#token=${token}`);
+  const link = await screen.findByRole('link', { name: 'Sign in with Google' });
+  link.addEventListener('click', event => { event.preventDefault(); }); fireEvent.click(link);
+  expect(screen.getByText(/Reopen your verification email afterward/)).toBeVisible();
+});
+
+test.each([
+  ['cancelled', 'Google sign-in was cancelled'], ['linking_required', 'Use your existing sign-in method'],
+  ['signed_in', 'Google sign-in did not complete'], ['<img src=x>', 'Google sign-in did not complete'],
+  ['failed&google=signed_in', 'Google sign-in did not complete'],
+])('handles callback %s without trusting the URL to establish a session', async (outcome, title) => {
+  sessionStorage.setItem('job-hunter.google-return', '/jobs');
+  mount(`/login?code=private-code&state=private-state#google=${outcome}`);
+  expect(await screen.findByText(title)).toBeVisible();
+  await waitFor(() => { expect(screen.getByText(title).closest('[tabindex]')).toHaveFocus(); });
+  expect(window.location.hash).toBe(''); expect(window.location.search).not.toMatch(/private/);
+  expect(sessionStorage.length).toBe(0); expect(document.querySelector('img')).toBeNull();
+  if (outcome === 'linking_required') {
+    expect(screen.getByText(/matching email addresses never connect accounts/)).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Account settings' })).toHaveAttribute('href', '/settings');
+  }
+});
+
+test('refreshes a successful Google callback before opening the validated saved workspace', async () => {
+  sessionStorage.setItem('job-hunter.google-return', '/jobs?filter=saved'); current = { ...owner, email_verified: true };
+  mount('/login#google=signed_in');
+  expect(await screen.findByText('Jobs tools are not available yet')).toBeVisible();
+  expect(window.location.pathname + window.location.search).toBe('/jobs?filter=saved');
+  expect(window.location.hash).toBe('');
+});
+
+test('falls back safely when callback storage is unavailable and retries an unavailable session', async () => {
+  const user = userEvent.setup();
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Unavailable'); });
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('Unavailable'); });
+  server.use(http.get('http://localhost/api/auth/me', () => failure(503)));
+  mount('/login?returnTo=https://outside.example#google=signed_in');
+  expect(await screen.findByText('We couldn’t confirm Google sign-in')).toBeVisible();
+  current = { ...owner, email_verified: true };
+  server.use(http.get('http://localhost/api/auth/me', () => HttpResponse.json(current)));
+  await user.click(screen.getByRole('button', { name: 'Check session again' }));
+  expect(await screen.findByText('Profile tools are not available yet')).toBeVisible();
+});
+
+test('handles a later callback in the same page and preserves the existing account after cancellation', async () => {
+  const user = userEvent.setup(); current = { ...owner, email_verified: true };
+  mount('/login#google=cancelled');
+  expect(await screen.findByRole('link', { name: 'Return to your workspace' })).toBeVisible();
+  act(() => { window.history.pushState(null, '', '/login#google=linking_required'); window.dispatchEvent(new PopStateEvent('popstate')); });
+  expect(await screen.findByText('Use your existing sign-in method')).toBeVisible();
+  expect(window.location.hash).toBe('');
+  await user.click(screen.getByRole('link', { name: 'Return to your workspace' }));
+  expect(await screen.findByText('Profile tools are not available yet')).toBeVisible();
+});
+
+test.each(['known@example.org', 'unknown@example.org'])('makes the same generic recovery request for %s', async email => {
+  const user = userEvent.setup(); let calls = 0;
+  server.use(http.post('http://localhost/api/auth/forgot-password', async ({ request }) => {
+    calls++; expect(await request.json()).toEqual({ email }); return HttpResponse.json({ status: 'accepted' }, { status: 202 });
+  }));
+  mount('/login'); await user.type(screen.getByRole('textbox', { name: 'Email address' }), email);
+  await user.click(screen.getByRole('link', { name: 'Forgot your password?' }));
+  expect(screen.getByRole('textbox', { name: 'Email address' })).toHaveValue(email);
+  await user.click(screen.getByRole('button', { name: 'Send reset link' }));
+  expect(await screen.findByText(/If this email belongs to a password account/)).toHaveTextContent('Links last one hour.');
+  expect(screen.getByRole('link', { name: 'Return to sign in' })).toHaveFocus();
+  await user.click(screen.getByRole('link', { name: 'Return to sign in' }));
+  expect(screen.getByRole('textbox', { name: 'Email address' })).toHaveValue(email); expect(calls).toBe(1);
+});
+
+test.each(['', '#token=short', `#token=${token}&token=${token}`, '?token=private-query'])('cleans unusable reset links and offers replacement: %s', async suffix => {
+  mount(`/reset-password${suffix}`);
+  expect(await screen.findByText('Reset link unavailable')).toBeVisible();
+  expect(screen.getByText(/Links expire after one hour/)).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Request a new reset link' })).toHaveAttribute('href', '/forgot-password');
+  expect(window.location.hash + window.location.search).toBe('');
+  expect(screen.queryByRole('button', { name: 'Reset password' })).not.toBeInTheDocument();
+});
+
+test.each([true, false])('submits a reset without storing credentials and handles generic acceptance (valid=%s)', async valid => {
+  const user = userEvent.setup(); current = owner; let calls = 0; let release: () => void = () => undefined;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const storage = vi.spyOn(Storage.prototype, 'setItem');
+  server.use(http.post('http://localhost/api/auth/reset-password', async ({ request }) => {
+    calls++; expect(request.headers.get('x-csrf-token')).toBe(owner.csrf_token);
+    expect(await request.json()).toEqual({ token, password: secret }); await pending;
+    if (valid) current = null;
+    return HttpResponse.json({ status: 'accepted' }, { status: 202 });
+  }));
+  mount(`/reset-password#token=${token}`);
+  await screen.findByRole('button', { name: 'Account' });
+  api.queryClient.setQueryData(['private-profile'], 'private fixture');
+  const password = screen.getByLabelText(/^New password/);
+  expect(password).toHaveAttribute('autocomplete', 'new-password');
+  await user.type(password, secret); await user.click(screen.getByRole('button', { name: 'Show password' }));
+  expect(password).toHaveAttribute('type', 'text');
+  await user.click(screen.getByRole('button', { name: 'Hide password' })); password.focus(); await user.keyboard('{Enter}{Enter}');
+  fireEvent.submit(screen.getByRole('form', { name: 'Reset password' }));
+  expect(screen.getByRole('button', { name: 'Sending request…' })).toBeDisabled(); release();
+  expect(await screen.findByText(/An expired or already-used link cannot change your password/)).toBeVisible();
+  expect(calls).toBe(1); expect(storage).not.toHaveBeenCalled();
+  expect(window.location.hash + window.location.search).toBe(''); expect(JSON.stringify(window.history.state)).not.toContain(token);
+  expect(JSON.stringify(api.queryClient.getMutationCache().getAll().map(item => item.state))).not.toMatch(new RegExp(token + '|' + secret.trim()));
+  if (valid) {
+    expect(api.queryClient.getQueryData(['private-profile'])).toBeUndefined();
+    await user.click(screen.getByRole('link', { name: 'Return to sign in' }));
+    expect(await screen.findByRole('form', { name: 'Sign in' })).toBeVisible();
+    expect(screen.getByLabelText(/^Password/)).toHaveValue('');
+  } else expect(api.queryClient.getQueryData(sessionKey)).toEqual(owner);
+});
+
+test.each(['forgot-password', 'reset-password'])('validates and retries %s after a rate limit without automatic submissions', async endpoint => {
+  const user = userEvent.setup(); let calls = 0;
+  server.use(http.post(`http://localhost/api/auth/${endpoint}`, () => { calls++; return failure(429, [], { 'Retry-After': '2' }); }));
+  mount(`/${endpoint}${endpoint === 'reset-password' ? `#token=${token}` : ''}`);
+  const label = endpoint === 'reset-password' ? 'Reset password' : 'Send reset link';
+  await user.click(screen.getByRole('button', { name: label })); expect(calls).toBe(0);
+  if (endpoint === 'reset-password') await user.type(screen.getByLabelText(/^New password/), secret);
+  else await user.type(screen.getByRole('textbox', { name: 'Email address' }), owner.email);
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  await vi.waitFor(() => { expect(screen.getByText(/Try again in/)).toBeVisible(); });
+  expect(screen.getByRole('button', { name: label })).toBeDisabled(); expect(calls).toBe(1);
+  if (endpoint === 'reset-password') expect(screen.getByLabelText(/^New password/)).toHaveValue('');
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(screen.getByRole('button', { name: label })).toBeEnabled(); expect(calls).toBe(1);
+});
+
+test.each(['forgot-password', 'reset-password'])('associates %s validation safely and allows correcting the input', async endpoint => {
+  const user = userEvent.setup(); const field = endpoint === 'reset-password' ? 'password' : 'email';
+  server.use(http.post(`http://localhost/api/auth/${endpoint}`, () => failure(422, [{ field, message: '<script>Invalid input</script>' }])));
+  mount(`/${endpoint}${endpoint === 'reset-password' ? `#token=${token}` : ''}`);
+  const input = field === 'password' ? screen.getByLabelText(/^New password/) : screen.getByRole('textbox', { name: 'Email address' });
+  await user.type(input, field === 'password' ? secret : owner.email); await user.keyboard('{Enter}');
+  await waitFor(() => { expect(input).toHaveAttribute('aria-invalid', 'true'); }); expect(input).toHaveFocus();
+  expect(input).toHaveAccessibleDescription(/<script>Invalid input<\/script>/);
+  server.use(http.post(`http://localhost/api/auth/${endpoint}`, () => HttpResponse.json({ status: 'accepted' }, { status: 202 })));
+  if (field === 'password') await user.type(input, secret);
+  await user.keyboard('{Enter}'); expect(await screen.findByRole('region', { name: 'Recovery request received' })).toBeVisible();
+});
+
+test('accepts a later reset link without reusing the previous confirmation', async () => {
+  const user = userEvent.setup(); const seen: unknown[] = [];
+  server.use(http.post('http://localhost/api/auth/reset-password', async ({ request }) => {
+    seen.push(await request.json()); return HttpResponse.json({ status: 'accepted' }, { status: 202 });
+  }));
+  mount(`/reset-password#token=${token}`); await user.type(screen.getByLabelText(/^New password/), secret); await user.keyboard('{Enter}');
+  await screen.findByRole('region', { name: 'Recovery request received' });
+  act(() => { window.history.pushState(null, '', `/reset-password#token=${'n'.repeat(43)}`); window.dispatchEvent(new PopStateEvent('popstate')); });
+  await user.type(await screen.findByLabelText(/^New password/), secret); await user.keyboard('{Enter}');
+  await waitFor(() => { expect(seen).toEqual([{ token, password: secret }, { token: 'n'.repeat(43), password: secret }]); });
+});
+
+
+test.each(['/login?returnTo=/jobs', `/reset-password#token=${token}`])('keeps the keyboard skip link separate from credentials on %s', async path => {
+  mount(path); await screen.findByRole('button', { name: path.startsWith('/login') ? 'Sign in' : 'Reset password' });
+  await waitFor(() => { expect(window.location.hash).toBe(''); });
+  act(() => { window.history.pushState(null, '', window.location.pathname + window.location.search + '#main-content'); window.dispatchEvent(new PopStateEvent('popstate')); });
+  expect(screen.queryByText('Google sign-in did not complete')).not.toBeInTheDocument();
+  expect(screen.queryByText('Reset link unavailable')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: path.startsWith('/login') ? 'Sign in' : 'Reset password' })).toBeVisible();
+});
+
+test('does not consume a newer reset link when an earlier request finishes', async () => {
+  const user = userEvent.setup(); let release: () => void = () => undefined;
+  const pending = new Promise<void>(resolve => { release = resolve; }); const seen: unknown[] = [];
+  server.use(http.post('http://localhost/api/auth/reset-password', async ({ request }) => {
+    seen.push(await request.json()); await pending; return HttpResponse.json({ status: 'accepted' }, { status: 202 });
+  }));
+  mount(`/reset-password#token=${token}`); await user.type(screen.getByLabelText(/^New password/), secret); await user.keyboard('{Enter}');
+  act(() => { window.history.pushState(null, '', `/reset-password#token=${'n'.repeat(43)}`); window.dispatchEvent(new PopStateEvent('popstate')); });
+  release(); await waitFor(() => { expect(screen.getByRole('button', { name: 'Reset password' })).toBeEnabled(); });
+  expect(screen.queryByRole('region', { name: 'Recovery request received' })).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText(/^New password/), secret); await user.keyboard('{Enter}');
+  await waitFor(() => { expect(seen).toEqual([{ token, password: secret }, { token: 'n'.repeat(43), password: secret }]); });
+});
+
+
+test('continues email sign-in to the saved workspace after a cancelled Google attempt', async () => {
+  const user = userEvent.setup(); login(true); sessionStorage.setItem('job-hunter.google-return', '/jobs');
+  mount('/login#google=cancelled'); await screen.findByText('Google sign-in was cancelled');
+  await fill(user); await user.keyboard('{Enter}');
+  expect(await screen.findByText('Jobs tools are not available yet')).toBeVisible();
+  expect(window.location.pathname).toBe('/jobs');
 });

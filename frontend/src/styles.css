@@ -383,3 +383,19 @@ section {
 }
 .auth-content .ui-button { justify-self: start; }
 .auth-content > p { margin: 0; }
+
+/* Google Identity's supplied HTML button uses this system-font fallback and logo palette. */
+.ui-button.google-signin {
+  background: var(--color-surface);
+  border-color: #747775;
+  border-radius: var(--radius-control);
+  color: #1f1f1f;
+  font-family: Arial, sans-serif;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  gap: 0.625rem;
+  padding-inline: 0.75rem;
+  text-decoration: none;
+}
+.ui-button.google-signin:not(:disabled):hover { background: #f2f2f2; }
+.google-signin svg { width: 20px; height: 20px; flex: none; }

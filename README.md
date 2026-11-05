@@ -150,8 +150,8 @@ session check; anonymous visitors go to login with a validated `returnTo` path. 
 stay within these workspace route families; external, malformed and auth-loop targets use `/profile`.
 Session failures offer a retry, expiry explains the redirect, and sign-out reports success only when
 the server confirms it. Missing routes and unexpected render errors offer recovery actions.
-Email/password registration, login and email verification are available. Google sign-in and password
-recovery screens arrive in #23; actual workspace feature content remains in its owning issues.
+Email/password registration, login, email verification, Google sign-in and password recovery are
+available. Actual workspace feature content remains in its owning issues.
 
 Navigation stays visible at mobile widths. Route changes update the title and focus the main
 container; the initial Tab reaches the skip link. The account disclosure uses ordinary Tab order,
@@ -186,6 +186,33 @@ pass covered fields, password visibility, submits, verification and resend. Both
 zero automated WCAG A/AA violations; the verified state also passed its scan. Visually checked
 [desktop registration](docs/validation/issue-22-desktop.jpg) and
 [mobile verification login](docs/validation/issue-22-mobile.jpg) captures record representative states.
+
+Google sign-in appears only after `/api/auth/providers` confirms it is configured. Availability failures
+have an explicit retry. The action navigates to the backend start endpoint and stores only a validated
+workspace return path in sessionStorage, consumed on callback; unavailable storage falls back safely.
+Callback outcomes are allowlisted, sensitive URL content is removed, and successful sign-in requires
+an actual API session. Cancellation remains retryable; collisions explain signing into the existing
+account before explicitly connecting Google in settings. Matching email addresses never link accounts.
+The G artwork, light palette and Arial fallback follow Google's supplied
+[HTML button example](https://developers.google.com/identity/branding-guidelines) (Apache 2.0 code sample);
+no Google SDK or remote font loads in the page.
+
+Forgot-password confirms the same generic result for every email. Reset links stay in page memory
+while all credential fragments/query parameters are removed immediately. Links last one hour and
+are single-use; malformed links offer replacement. Generic 202 acceptance never claims the password
+changed: expired or replayed links receive the same response. Accepted resets refresh the session,
+clear the pending token and focus a return-to-login link. Passwords clear after every attempt; failed
+requests allow correction/retry without persisting the token. Reloading requires reopening the link.
+
+Issue #23's Chromium run used the real API, worker and fresh isolated PostgreSQL with signed OIDC
+and captured-mail fixtures: Google return/cancel/collision, recovery delivery, reset, revoked sessions,
+old-password rejection, new-password login and harmless replay passed. The keyboard pass covered
+skip links, Google activation, recovery fields, visibility, submit and focused return-to-login.
+Login/forgot/reset passed all 18 layouts (320/768/1440px × 100%/200% text), including long labels and
+reduced motion, without horizontal overflow or automated WCAG A/AA violations. Both callback error
+states also passed scans. No external requests, page errors or persisted browser credentials remained.
+Visually checked [desktop sign-in](docs/validation/issue-23-desktop.jpg) and
+[mobile reset](docs/validation/issue-23-mobile.jpg) captures record representative states.
 
 Shared interface primitives live in `frontend/src/shared/ui.tsx`; color, spacing, type, radius and
 focus tokens live in `frontend/src/styles.css`. Use `Button` with `primary`, `secondary` or `danger`
@@ -318,7 +345,7 @@ Reset atomically consumes the token, replaces the credential and revokes all of 
 A changed credential invalidates previously issued recovery links; concurrent login rechecks the locked
 credential before issuing a session. Reset never creates a password identity or signs the user in.
 Mail and expiry tasks reuse encrypted delivery, bounded SMTP retries and cleanup; no raw token enters
-task payloads, API responses or logs. The recovery UI arrives in #23.
+task payloads, API responses or logs. The recovery screens preserve this generic acceptance contract.
 
 ### Google sign-in
 
@@ -336,7 +363,8 @@ The callback redirects to `JOB_HUNTER_MAIL_PUBLIC_URL/login#google=` followed by
 `cancelled`, `failed` or `linking_required`, clearing the flow cookie and callback query.
 Uvicorn receives a scrubbed query; any reverse proxy must also omit callback query strings from logs.
 New accounts use the verified email claim; existing issuer/subject identities retain their stored
-email and verification state. Email conflicts never link accounts. Linking is #18; UI handling is #23.
+email and verification state. Email conflicts never link accounts; the sign-in screen explains the
+separate authenticated linking action. The identity-linking settings screen remains planned for #64.
 The migration downgrade logs Google sessions out. Tests expose `OidcTransport` in `test_oidc.py`
 for local signed-token/JWKS/code fixtures; normal CI does not contact Google.
 

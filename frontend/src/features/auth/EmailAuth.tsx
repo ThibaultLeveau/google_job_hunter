@@ -4,6 +4,7 @@ import type { components } from '../../../generated/api';
 import { api, type Session } from '../../shared/api';
 import { Button, Field } from '../../shared/ui';
 import { safeReturnPath } from '../../app/routes';
+import { GoogleSignIn } from './GoogleSignIn';
 import { authError, fieldError, useAuthAction } from './useAuthAction';
 
 export function EmailAuth({ mode }: { mode: 'login' | 'register' }) {
@@ -57,5 +58,7 @@ export function EmailAuth({ mode }: { mode: 'login' | 'register' }) {
     <Link to={`/${registering ? 'login' : 'register'}?returnTo=${encodeURIComponent(target)}`} state={{ email }}>
       {registering ? 'Already have an account? Sign in' : 'Create an account'}
     </Link>
+    {!registering && <Link to="/forgot-password" state={{ email }}>Forgot your password?</Link>}
+    <GoogleSignIn />
   </form>;
 }
