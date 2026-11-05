@@ -1,0 +1,20 @@
+services:
+  database:
+    image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:5895949dfcdf308eb0cd31c950c93c14895c77f33fbedfecf1fa511ab1d4bcd2
+    environment:
+      POSTGRES_USER: job_hunter
+      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_DB: job_hunter
+    ports:
+      - "127.0.0.1:${JOB_HUNTER_DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U job_hunter -d job_hunter"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+
+volumes:
+  postgres_data:

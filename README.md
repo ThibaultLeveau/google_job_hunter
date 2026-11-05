@@ -7,7 +7,8 @@ run grouped Google searches, and inspect public job evidence and private profile
 liveness endpoint. Architecture and contribution contracts are established.
 The React frontend provides an accessible workspace preview and local API proxy.
 Backend and frontend GitHub Actions checks enforce lint, strict types and coverage.
-Worker and database setup remain planned.
+PostgreSQL/pgvector, explicit transaction sessions and Alembic schema setup are available.
+Worker setup and database integration in CI remain planned.
 
 - Read [the architecture](docs/architecture.md) for product scope, ownership, recovery and operator settings.
 - Read [the contribution rules](AGENTS.md) before implementation.
@@ -118,13 +119,73 @@ Invalid values abort startup with field names only, without submitted values or 
 Tests may pass immutable `Settings` explicitly to `create_app` to avoid ambient configuration.
 No provider credentials or business settings are introduced by this bootstrap.
 
+### Local PostgreSQL and migrations
+
+From the root, start the development-only database (Docker Compose required):
+
+```bash
+docker compose -p job-hunter-development up -d --wait database
+```
+
+Compose pins pgvector 0.8.7/PostgreSQL 18 by immutable image digest, publishes only
+`127.0.0.1:5432` and stores data in the project's `postgres_data` named volume.
+The committed password is a local fixture, never a production credential. If port 5432 is occupied,
+set `JOB_HUNTER_DB_PORT` when starting Compose and use that port in the URL below.
+Stop with `docker compose -p job-hunter-development down`; this preserves the named volume.
+
+From `backend/`, configure the local URL in the process environment and apply the schema:
+
+```bash
+export JOB_HUNTER_DATABASE_URL='postgresql+psycopg://job_hunter:local-development-only@127.0.0.1:5432/job_hunter'
+uv run --locked alembic upgrade head
+uv run --locked alembic heads
+uv run --locked alembic current
+```
+
+Alembic reads `[tool.alembic]` in `pyproject.toml`; migrations are explicitly authored in
+`backend/migrations/versions/`. There is no application `create_all` or automatic startup migration.
+The initial migration enables `vector` only. Run migrations using a role permitted to create the
+extension; runtime permissions are an operator concern when deployment is introduced.
+`uv run --locked alembic upgrade head --sql` emits reviewable offline PostgreSQL SQL without a URL.
+Downgrading to `base` drops the extension without CASCADE and is only appropriate on disposable data.
+
+| Database environment variable | Default | Behavior |
+| --- | --- | --- |
+| `JOB_HUNTER_DATABASE_URL` | Unset | Secret PostgreSQL URL using `postgresql+psycopg`; one host and database required. Optional `sslmode`/`sslrootcert` query parameters only. |
+| `JOB_HUNTER_DATABASE_POOL_SIZE` | `5` | Integer 1–20; no overflow connections. |
+
+Database construction is lazy; liveness stays available without a configured or reachable database.
+`GET /api/health/ready` returns `200 {"status":"ok"}` when `SELECT 1` succeeds, otherwise
+`503 {"status":"unavailable"}`. It reveals no connection settings or exception text. It checks
+connectivity, not schema compatibility. Both health handlers are synchronous; blocking SQL runs
+off the API event loop. App shutdown disposes the pool in a thread.
+
+Pool acquisition, connection attempts, statements and locks have two-second limits. TCP user and
+keepalive timeouts also bound stalled connections; DNS resolution and sequential connection phases
+mean these are per-operation bounds, not a two-second HTTP deadline.
+Use `with database.transaction() as session:` for one explicit unit of work. Success commits;
+exceptions roll back; either outcome permanently closes the session. Adapters must not commit their
+caller's transaction, share sessions or hold a transaction during external provider calls.
+
+Run real database tests locally after starting Compose, from `backend/`:
+
+```bash
+TEST_DATABASE_URL="$JOB_HUNTER_DATABASE_URL" uv run --locked pytest -m integration
+```
+
+The test role must create/drop databases. Each integration test creates a randomly named database,
+then closes connections and drops only that database. Tests cover fresh extension migrations and
+downgrade/upgrade, readiness, failed-transaction rollback, committed inserts, session closure,
+pool exhaustion and statement timeout. They never substitute SQLite or mock transaction semantics.
+Without `TEST_DATABASE_URL`, these tests explicitly skip; ordinary tests still verify redacted
+database-down readiness, settings and offline migration SQL. CI database service wiring arrives in #8.
+
 The following are **planned command contracts, not working setup instructions**.
 They were checked against the linked foundation issues; those PRs must implement and verify them.
 Supported Python/Node minors and dependency versions are deliberately resolved and pinned in their bootstraps.
 
 | Available after | Working directory | Planned commands or contract |
 | --- | --- | --- |
-| [#7](https://github.com/ThibaultLeveau/google_job_hunter/issues/7) | Root / `backend/` | Supplies Compose service/schema commands; introduces Alembic and real PostgreSQL/pgvector |
 | [#8](https://github.com/ThibaultLeveau/google_job_hunter/issues/8) | `backend/` | Supplies integration invocation, fresh migrations and single-head verification in CI |
 | [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11) | `backend/` | Supplies the separate worker command and registered handlers |
 | [#20](https://github.com/ThibaultLeveau/google_job_hunter/issues/20) | Backend / frontend | Supplies deterministic OpenAPI export and ignored type generation before frontend checks/build/tests |
