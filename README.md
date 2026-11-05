@@ -120,11 +120,27 @@ Settings are read for each app creation and validated before serving requests:
 | Environment variable | Default | Behavior |
 | --- | --- | --- |
 | `JOB_HUNTER_DOCS_ENABLED` | `false` | Boolean; `true` enables `/docs` and `/openapi.json` |
+| `JOB_HUNTER_TRUSTED_HOSTS` | `["localhost", "127.0.0.1"]` | JSON list of exact lowercase hostnames, without wildcards or ports. |
+| `JOB_HUNTER_ALLOWED_ORIGINS` | `["http://localhost:5173", "http://127.0.0.1:5173"]` | JSON list of exact HTTP(S) origins; no paths, credentials or wildcards. |
+| `JOB_HUNTER_REQUEST_MAX_BYTES` | `1048576` | Raw body limit, 1–16777216 bytes; actual received bytes are counted. |
 
 Set variables in the process environment; the application does not load `.env` files automatically.
 Invalid values abort startup with field names only, without submitted values or chained validation errors.
 Tests may pass immutable `Settings` explicitly to `create_app` to avoid ambient configuration.
 No provider credentials or business settings are introduced by this bootstrap.
+
+API errors use the typed OpenAPI envelope `{code, message, field_errors, request_id}`.
+Messages are fixed English text; field errors expose only declared names (at most 20), never values,
+dynamic keys or exception details. Valid UUID `X-Request-ID` headers propagate; invalid/missing IDs
+are replaced. Unexpected failures log only the request ID and return a generic 500 before headers start.
+After a streaming response starts, an error cannot replace that response; its exception stays redacted.
+
+Production must replace local origins/hosts with its exact same-origin HTTPS origin and hostname.
+Unknown Origin/Host values are rejected, and credentialed CORS permits only configured origins with
+explicit methods/headers. Requests without Origin still require a trusted Host. API responses use
+no-store, nosniff, frame/referrer restrictions and a restrictive CSP; HTTPS responses add HSTS.
+Bodies are buffered within the byte limit before handlers run, with a ten-second receive deadline;
+declared or streamed excess returns 413. Upload parsing and session/CSRF policy belong to later issues.
 
 ### Local PostgreSQL and migrations
 
