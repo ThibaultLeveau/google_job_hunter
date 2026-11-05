@@ -101,6 +101,11 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
         "/api/auth/login",
         "/api/auth/me",
         "/api/auth/logout",
+        "/api/auth/methods",
+        "/api/auth/actions/{action}",
+        "/api/auth/reauthenticate/password",
+        "/api/auth/google/{intent}",
+        "/api/auth/google/{intent}/callback",
     ]
     first.dependency_overrides[load_settings] = lambda: Settings(docs_enabled=True)
     assert second.dependency_overrides == {}

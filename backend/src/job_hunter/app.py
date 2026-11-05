@@ -13,6 +13,7 @@ from starlette.responses import RedirectResponse
 
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
+from job_hunter.api.reauth import FLOW_COOKIE, FLOW_PATH, install_reauthentication
 from job_hunter.api.sessions import (
     COOKIE,
     authenticated_user,
@@ -24,6 +25,7 @@ from job_hunter.api.sessions import router as sessions_router
 from job_hunter.application.accounts import RegisterAccount, VerifyEmail
 from job_hunter.application.auth_limits import AuthLimits
 from job_hunter.application.oidc import ConsentCancelled, GoogleSignIn, LinkingRequired
+from job_hunter.application.reauth import Reauthentication
 from job_hunter.application.recovery import PasswordRecovery
 from job_hunter.application.sessions import LIFETIME, Sessions
 from job_hunter.domain.accounts import InvalidRegistration, Registration, SessionUser
@@ -40,6 +42,7 @@ from job_hunter.infrastructure.oidc import (
     PostgresOidc,
     load_google_settings,
 )
+from job_hunter.infrastructure.reauth import PostgresProofs, recency_seconds
 from job_hunter.infrastructure.recovery import PostgresRecovery
 from job_hunter.settings import Settings, load_settings
 
@@ -120,7 +123,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def discard_callback_query(
         request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        if request.scope["path"].rstrip("/") == CALLBACK:
+        if request.scope["path"].startswith(FLOW_PATH + "/") and request.scope[
+            "path"
+        ].rstrip("/").endswith("/callback"):
             raw = request.scope["query_string"]
             request.scope["query_string"] = b""
             request.state.google_query = QueryParams(raw if len(raw) <= 4096 else b"")
@@ -174,7 +179,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if accounts is not None
         else "/login"
     )
-    flow_cookie, flow_path = "job_hunter_oidc", "/api/auth/google"
+    app.state.auth_result_url = result_url
+    seconds = recency_seconds()
+    app.state.reauthentication = (
+        Reauthentication(
+            PostgresProofs(database),
+            app.state.google_sign_in,
+            Argon2Passwords().verify,
+            lambda: datetime.now(UTC),
+            seconds,
+        )
+        if database is not None
+        else None
+    )
 
     @app.get("/api/auth/providers")
     def providers() -> dict[str, bool]:
@@ -189,10 +206,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         url, binding = service.start(request.cookies.get(COOKIE, ""))
         response = RedirectResponse(url, status_code=302)
         response.set_cookie(
-            flow_cookie,
+            FLOW_COOKIE,
             binding,
             max_age=300,
-            path=flow_path,
+            path=FLOW_PATH,
             secure=True,
             httponly=True,
             samesite="lax",
@@ -210,7 +227,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ):
                 token = service.finish(
                     query.get("state", ""),
-                    request.cookies.get(flow_cookie, ""),
+                    request.cookies.get(FLOW_COOKIE, ""),
                     request.cookies.get(COOKIE, ""),
                     query.get("code", ""),
                     query.get("error", ""),
@@ -234,7 +251,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 samesite="lax",
             )
         response.delete_cookie(
-            flow_cookie, path=flow_path, secure=True, httponly=True, samesite="lax"
+            FLOW_COOKIE, path=FLOW_PATH, secure=True, httponly=True, samesite="lax"
         )
         return response
 
@@ -314,4 +331,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RegistrationResult()
 
     app.include_router(sessions_router)
+    install_reauthentication(app)
     return app
