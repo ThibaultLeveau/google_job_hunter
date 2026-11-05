@@ -152,8 +152,15 @@ class PostgresTaskQueue(TaskQueue):
         self.session.flush()
         return snapshot(row)
 
-    def _finish(
-        self, task: Task, now: datetime, status: TaskStatus, error: TaskError | None
+    def _transition(
+        self,
+        task: Task,
+        now: datetime,
+        status: TaskStatus,
+        error: TaskError | None,
+        *,
+        run_at: datetime | None = None,
+        lease: timedelta | None = None,
     ) -> Task:
         require_utc(now)
         row = self.session.scalar(
@@ -167,8 +174,9 @@ class PostgresTaskQueue(TaskQueue):
             )
             .values(
                 status=status,
-                lease_token=uuid4(),
-                lease_expires_at=None,
+                lease_token=task.lease_token if lease else uuid4(),
+                lease_expires_at=now + lease if lease else None,
+                run_at=run_at if run_at is not None else TaskRecord.run_at,
                 error_code=error.value if error is not None else None,
                 updated_at=now,
             )
@@ -179,13 +187,49 @@ class PostgresTaskQueue(TaskQueue):
             raise StaleLease()
         return snapshot(row)
 
+    def renew(self, task: Task, now: datetime, lease: timedelta) -> Task:
+        if not timedelta(0) < lease <= timedelta(minutes=5):
+            raise ValueError("Lease must be positive and at most five minutes.")
+        return self._transition(task, now, "running", None, lease=lease)
+
+    def defer(self, task: Task, retry_at: datetime, now: datetime) -> Task:
+        require_utc(retry_at)
+        if retry_at < now:
+            raise ValueError("Retry cannot precede the current time.")
+        if task.attempts >= task.max_attempts:
+            return self.fail(task, TaskError.EXHAUSTED, now)
+        return self._transition(
+            task, now, "pending", TaskError.TRANSIENT, run_at=retry_at
+        )
+
+    def recover(self, kinds: tuple[str, ...], now: datetime) -> None:
+        require_utc(now)
+        rows = self.session.scalars(
+            select(TaskRecord)
+            .where(
+                TaskRecord.kind.in_(kinds),
+                TaskRecord.status == "running",
+                TaskRecord.lease_expires_at <= now,
+            )
+            .order_by(TaskRecord.id)
+            .limit(100)
+            .with_for_update(skip_locked=True)
+        )
+        for row in rows:
+            exhausted = row.attempts >= row.max_attempts
+            row.status = "failed" if exhausted else "pending"
+            row.error_code = TaskError.EXHAUSTED if exhausted else TaskError.TRANSIENT
+            row.lease_token, row.lease_expires_at = uuid4(), None
+            row.run_at = row.updated_at = now
+        self.session.flush()
+
     def complete(self, task: Task, now: datetime) -> Task:
-        return self._finish(task, now, "succeeded", None)
+        return self._transition(task, now, "succeeded", None)
 
     def fail(self, task: Task, error: TaskError, now: datetime) -> Task:
         if not isinstance(error, TaskError):
             raise ValueError("Use a safe task error code.")
-        return self._finish(task, now, "failed", error)
+        return self._transition(task, now, "failed", error)
 
     def retry(self, key: TaskKey, expected_generation: int, now: datetime) -> Task:
         require_utc(now)
