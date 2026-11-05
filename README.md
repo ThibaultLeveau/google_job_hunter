@@ -5,8 +5,9 @@ run grouped Google searches, and inspect public job evidence and private profile
 
 **Current state:** the backend bootstrap provides a typed FastAPI app factory and a credential-free
 liveness endpoint. Architecture and contribution contracts are established.
-Backend GitHub Actions checks enforce formatting, lint, strict types and coverage.
-Frontend, worker and database setup remain planned.
+The React frontend provides an accessible workspace preview and local API proxy.
+Backend and frontend GitHub Actions checks enforce lint, strict types and coverage.
+Worker and database setup remain planned.
 
 - Read [the architecture](docs/architecture.md) for product scope, ownership, recovery and operator settings.
 - Read [the contribution rules](AGENTS.md) before implementation.
@@ -69,6 +70,43 @@ only pushes to `main` save it. Failures upload available JUnit and coverage repo
 Tests still run after lint failure when installation succeeds, so failure reports remain useful.
 Validate workflow syntax locally with `actionlint .github/workflows/backend.yml` from the root.
 
+The frontend uses Node 26.13.0 and npm 11.20.0, pinned in `frontend/package.json`.
+From `frontend/`, install the lockfile and start the local UI:
+
+```bash
+npm ci
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. Run the backend on port 8000 using the command above;
+Vite forwards same-origin `/api` requests there. Production hosting must provide the same-origin
+API boundary; `npm run preview` serves only the built UI at `http://127.0.0.1:4173`.
+Keep provider secrets server-side and never place them in `VITE_*` variables.
+
+Run the same frontend commands as the `Frontend quality` GitHub check:
+
+```bash
+npm run lint
+npm run typecheck
+npm run test:coverage
+npm run build
+```
+
+`npm test` runs the component tests without coverage. The shared jsdom setup uses Testing Library,
+user-event and MSW with no default handlers. Tests register only the requests they need through
+`server.use(...)`; handlers and the DOM are reset after each test. Unhandled requests are blocked
+and fail teardown even when application code catches the request error. No API keys are needed.
+
+Frontend coverage includes every `src/**/*.ts` and `src/**/*.tsx` module, including unimported files,
+with independent 90% line and 85% branch floors. The only application exclusion is `src/main.tsx`,
+which solely mounts React into the document and must not contain business logic. Tests and shared
+test setup are outside the maintained application denominator; generated API types do not exist yet.
+Vitest writes JUnit and coverage reports under ignored `frontend/reports/`, including on test failure.
+Both workflows retain available failure artifacts for seven days, use read-only repository access,
+verified action pins, bounded timeouts and cancel superseded runs. The npm cache contains package
+downloads keyed by platform and lockfile; it does not cache `node_modules` or build output.
+Validate both workflows with `actionlint .github/workflows/*.yml` from the repository root.
+
 Settings are read for each app creation and validated before serving requests:
 
 | Environment variable | Default | Behavior |
@@ -98,8 +136,6 @@ Supported Python/Node minors and dependency versions are deliberately resolved a
 
 | Available after | Working directory | Planned commands or contract |
 | --- | --- | --- |
-| [#4](https://github.com/ThibaultLeveau/google_job_hunter/issues/4) | `frontend/` | `npm ci`; `npm run dev`; `npm run typecheck`; `npm run lint`; `npm run build` |
-| [#5](https://github.com/ThibaultLeveau/google_job_hunter/issues/5) | `frontend/` | Adds the exact Vitest coverage script and CI with 90% lines / 85% branches; no test script exists yet |
 | [#7](https://github.com/ThibaultLeveau/google_job_hunter/issues/7) | Root / `backend/` | Supplies Compose service/schema commands; introduces Alembic and real PostgreSQL/pgvector |
 | [#8](https://github.com/ThibaultLeveau/google_job_hunter/issues/8) | `backend/` | Supplies integration invocation, fresh migrations and single-head verification in CI |
 | [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11) | `backend/` | Supplies the separate worker command and registered handlers |
@@ -113,8 +149,7 @@ The backend bootstrap makes no paid calls and performs no deployment.
 
 ## Bootstrap file budgets
 
-Each bootstrap is its own PR after its prerequisites merge. The backend inventory is implemented;
-the frontend inventory remains a plan.
+Each bootstrap is its own PR after its prerequisites merge. Both bootstrap inventories are implemented.
 Reserve space for tests/configuration within the ten-file limit; add feature layers only when used.
 
 | Backend issue #2 file | Purpose |
