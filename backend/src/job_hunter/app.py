@@ -10,10 +10,16 @@ from starlette.concurrency import run_in_threadpool
 
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
-from job_hunter.api.sessions import authenticated_user, browser_guard, limit_auth
+from job_hunter.api.sessions import (
+    authenticated_user,
+    browser_guard,
+    limit_auth,
+    require_origin,
+)
 from job_hunter.api.sessions import router as sessions_router
 from job_hunter.application.accounts import RegisterAccount, VerifyEmail
 from job_hunter.application.auth_limits import AuthLimits
+from job_hunter.application.recovery import PasswordRecovery
 from job_hunter.application.sessions import Sessions
 from job_hunter.domain.accounts import InvalidRegistration, Registration, SessionUser
 from job_hunter.infrastructure.accounts import (
@@ -23,6 +29,7 @@ from job_hunter.infrastructure.accounts import (
     PostgresSessions,
 )
 from job_hunter.infrastructure.database import Database
+from job_hunter.infrastructure.recovery import PostgresRecovery
 from job_hunter.settings import Settings, load_settings
 
 
@@ -47,6 +54,15 @@ class RegistrationResult(BaseModel):
 class VerificationRequest(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
     token: SecretStr = Field(min_length=43, max_length=43)
+
+
+class ForgotPasswordRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+    email: str = Field(min_length=3, max_length=320)
+
+
+class ResetPasswordRequest(VerificationRequest):
+    password: SecretStr = Field(min_length=15, max_length=128)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -110,6 +126,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if accounts is not None
         else None
     )
+    recovery = (
+        PasswordRecovery(
+            PostgresRecovery(database, accounts.verification.settings),
+            Argon2Passwords(),
+            lambda: datetime.now(UTC),
+        )
+        if database is not None and accounts is not None
+        else None
+    )
 
     @app.post("/api/auth/register", status_code=202)
     def register(body: RegistrationRequest, request: Request) -> RegistrationResult:
@@ -151,6 +176,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit_auth(request, "verification_resend", user.email)
         assert verification is not None
         verification.resend(user.user_id)
+        return RegistrationResult()
+
+    @app.post("/api/auth/forgot-password", status_code=202)
+    def forgot_password(
+        body: ForgotPasswordRequest, request: Request
+    ) -> RegistrationResult:
+        require_origin(request)
+        limit_auth(request, "recovery", body.email)
+        assert recovery is not None
+        recovery.request(body.email)
+        return RegistrationResult()
+
+    @app.post("/api/auth/reset-password", status_code=202)
+    def reset_password(
+        body: ResetPasswordRequest, request: Request
+    ) -> RegistrationResult:
+        require_origin(request)
+        limit_auth(request, "recovery")
+        assert recovery is not None
+        try:
+            recovery.reset(
+                body.token.get_secret_value(), body.password.get_secret_value()
+            )
+        except InvalidRegistration:
+            raise RequestValidationError(
+                [
+                    {
+                        "loc": ("body", "password"),
+                        "msg": "Invalid value.",
+                        "type": "value_error",
+                    }
+                ]
+            ) from None
         return RegistrationResult()
 
     app.include_router(sessions_router)

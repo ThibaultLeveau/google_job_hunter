@@ -93,6 +93,8 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
         "/api/auth/register",
         "/api/auth/verify",
         "/api/auth/resend-verification",
+        "/api/auth/forgot-password",
+        "/api/auth/reset-password",
         "/api/auth/login",
         "/api/auth/me",
         "/api/auth/logout",
@@ -918,8 +920,10 @@ def test_invalid_mail_configuration_is_safe(
     assert "canary" not in "".join(traceback.format_exception(raised.value))
 
 
+@pytest.mark.parametrize("subject", ["Verify your email", "Reset your password"])
 def test_smtp_uses_tls_canonical_sender_and_safe_transport_failure(
     monkeypatch: pytest.MonkeyPatch,
+    subject: str,
 ) -> None:
     transport = MagicMock()
     monkeypatch.setattr(smtplib, "SMTP_SSL", transport)
@@ -930,7 +934,7 @@ def test_smtp_uses_tls_canonical_sender_and_safe_transport_failure(
     transport.reset_mock()
     monkeypatch.setenv("JOB_HUNTER_MAIL_SMTP_USERNAME", "smtp-user")
     monkeypatch.setenv("JOB_HUNTER_MAIL_SMTP_PASSWORD", "private-smtp-canary")
-    mail = SmtpMail(load_mail_settings())
+    mail = SmtpMail(load_mail_settings(), subject)
     message_id, link = (
         uuid4(),
         "https://app.example.org/verify-email#token=private-token-canary",
@@ -946,6 +950,7 @@ def test_smtp_uses_tls_canonical_sender_and_safe_transport_failure(
         message["From"] == "accounts@example.org"
         and message["To"] == "user@example.org"
     )
+    assert message["Subject"] == subject
     assert message["Message-ID"] == f"<{message_id}@app.example.org>"
     assert link in message.get_content() and message.get_content_type() == "text/plain"
     connection.send_message.side_effect = smtplib.SMTPException("private-token-canary")

@@ -406,18 +406,20 @@ def load_mail_settings() -> MailSettings:
 
 
 class SmtpMail(Mail):
-    def __init__(self, settings: MailSettings) -> None:
-        self.settings = settings
+    def __init__(
+        self, settings: MailSettings, subject: str = "Verify your email"
+    ) -> None:
+        self.settings, self.subject = settings, subject
 
     def send(self, recipient: str, link: str, message_id: UUID) -> None:
         message = EmailMessage()
         message["From"], message["To"] = self.settings.sender, recipient
-        message["Subject"] = "Verify your email"
+        message["Subject"] = self.subject
         message["Message-ID"] = (
             f"<{message_id}@{urlsplit(self.settings.public_url).hostname}>"
         )
         message.set_content(
-            f"Verify your email:\n{link}\n\nThis link expires after one hour.\n"
+            f"{self.subject}:\n{link}\n\nThis link expires after one hour.\n"
         )
         try:
             with smtplib.SMTP_SSL(
@@ -584,3 +586,30 @@ class PostgresVerification(VerificationStore):
             ),
             "verification_expiry": Handler(lambda task: None, self.expired),
         }
+
+
+class RecoveryRecord(Base):
+    __tablename__ = "password_recoveries"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_recovery_user"),
+        UniqueConstraint("token_hash", name="uq_recovery_token"),
+        CheckConstraint("token_hash ~ '^[0-9a-f]{64}$'", name="ck_recovery_token"),
+        CheckConstraint("expires_at > created_at", name="ck_recovery_expiry"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    identity_id: Mapped[UUID] = mapped_column(
+        ForeignKey("auth_identities.id", ondelete="CASCADE")
+    )
+    token_hash: Mapped[str] = mapped_column(String(64))
+    credential_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RecoveryDeliveryRecord(Base):
+    __tablename__ = "recovery_deliveries"
+    id: Mapped[UUID] = mapped_column(
+        ForeignKey("password_recoveries.id", ondelete="CASCADE"), primary_key=True
+    )
+    encrypted_token: Mapped[bytes] = mapped_column(LargeBinary)
