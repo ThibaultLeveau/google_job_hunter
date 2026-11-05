@@ -150,8 +150,8 @@ session check; anonymous visitors go to login with a validated `returnTo` path. 
 stay within these workspace route families; external, malformed and auth-loop targets use `/profile`.
 Session failures offer a retry, expiry explains the redirect, and sign-out reports success only when
 the server confirms it. Missing routes and unexpected render errors offer recovery actions.
-Authentication forms and actual workspace feature content arrive in their owning roadmap issues;
-these route containers currently explain availability without inventing profile or job data.
+Email/password registration, login and email verification are available. Google sign-in and password
+recovery screens arrive in #23; actual workspace feature content remains in its owning issues.
 
 Navigation stays visible at mobile widths. Route changes update the title and focus the main
 container; the initial Tab reaches the skip link. The account disclosure uses ordinary Tab order,
@@ -162,6 +162,30 @@ sign-out cache clearing. All six 320/768/1440px × 100%/200% text layouts passed
 reduced motion, no horizontal overflow and no automated WCAG A/AA violations. Representative
 [desktop](docs/validation/issue-21-desktop.jpg) and [mobile](docs/validation/issue-21-mobile.jpg)
 captures were visually checked. Browser checks are local evidence; browser CI arrives in #67.
+
+Email forms use labelled fields, browser autocomplete, a keyboard-operated password visibility toggle
+and native input validation. Server field errors remain beside their fields and receive focus; other
+errors focus the form alert. Passwords clear after each request, while email survives retries and the
+registration/login transition. Pending requests prevent repeated submissions; HTTP 429 disables the
+affected action for Retry-After (60 seconds when absent or unusable), without automatically retrying.
+Registration focuses its sign-in link on success, and verification results receive focus.
+Credentials and verification tokens are never written to localStorage or sessionStorage.
+
+Unverified sessions see verification guidance instead of profile/search/job tools; settings and logout
+remain accessible. Verification links are kept only in page memory, and their fragment/query is removed
+from the address immediately. Sign in within that page to preserve a pending link. Verification submits
+once per activation, consumes the in-memory token and refreshes account state: generic 202 acceptance
+never proves verification. An invalid, expired, replayed or foreign link cannot verify an account;
+request a new email or reopen a link after a failed attempt. An already verified account shows its
+current state without submitting a replayed link. Reloading before use requires reopening the email.
+
+Issue #22's local Chromium journey used the real API, worker and isolated PostgreSQL with captured mail:
+registration, login, resend/replaced links, inline login, verification and replay passed. The keyboard
+pass covered fields, password visibility, submits, verification and resend. Both forms passed all six
+320/768/1440px × 100%/200% text layouts with long labels, reduced motion, no horizontal overflow and
+zero automated WCAG A/AA violations; the verified state also passed its scan. Visually checked
+[desktop registration](docs/validation/issue-22-desktop.jpg) and
+[mobile verification login](docs/validation/issue-22-mobile.jpg) captures record representative states.
 
 Shared interface primitives live in `frontend/src/shared/ui.tsx`; color, spacing, type, radius and
 focus tokens live in `frontend/src/styles.css`. Use `Button` with `primary`, `secondary` or `danger`
@@ -266,7 +290,7 @@ backups; rotate only after deliveries have drained or expired. Missing/invalid m
 Registration atomically saves the account, a SHA-256 token hash, an encrypted delivery record and
 referenced mail/expiry tasks. Duplicate registration sends no additional mail. Each link expires after
 one hour and uses the configured origin and `/verify-email#token=…`; fragments avoid access-log exposure.
-The verification UI arrives in #22. After login, submit the token in the JSON body of
+The verification screen signs in before submitting the token in the JSON body of
 `POST /api/auth/verify`; `POST /api/auth/resend-verification` needs no body. Both require the session's
 Origin/CSRF protection and shared attempt limits. They return generic `202 {"status":"accepted"}`;
 read `/api/auth/me` for verified state. Invalid, expired, foreign and replayed tokens cannot verify an
