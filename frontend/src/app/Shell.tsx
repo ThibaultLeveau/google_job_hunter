@@ -4,6 +4,8 @@ import { Link, NavLink, Navigate, Outlet, Route, Routes, matchPath, useLocation,
 import { api, type Session } from '../shared/api';
 import { Button, StatePanel } from '../shared/ui';
 import { EmailAuth } from '../features/auth/EmailAuth';
+import { GoogleCallback } from '../features/auth/GoogleSignIn';
+import { Recovery } from '../features/auth/Recovery';
 import { Verification, VerificationRequired } from '../features/auth/Verification';
 import { authRoutes, safeReturnPath, sessionNotice, workspaceRoutes } from './routes';
 
@@ -61,10 +63,10 @@ function RequireSession({ session, signingOut }: { session: UseQueryResult<Sessi
   return !session.data.email_verified && !matchPath('/settings', location.pathname) ? <VerificationRequired /> : <Outlet />;
 }
 
-function AuthPage({ title, session }: { title: string; session: Session | null }) {
+function AuthPage({ session }: { session: Session | null }) {
   const location = useLocation();
   const notice = sessionNotice(location.state);
-  if (session && ['/login', '/register'].some(path => matchPath(path, location.pathname))) {
+  if (session && matchPath('/register', location.pathname)) {
     return <Navigate replace to={safeReturnPath(new URLSearchParams(location.search).get('returnTo'))} />;
   }
   return <>
@@ -74,10 +76,9 @@ function AuthPage({ title, session }: { title: string; session: Session | null }
       description="Your local workspace was cleared. Reload to check your session before trying again."
       action={<a href="/login">Check session again</a>} />}
     {matchPath('/verify-email', location.pathname) ? <Verification />
-      : matchPath('/login', location.pathname) ? <EmailAuth key="login" mode="login" />
+      : matchPath('/login', location.pathname) ? <GoogleCallback><EmailAuth key="login" mode="login" /></GoogleCallback>
       : matchPath('/register', location.pathname) ? <EmailAuth key="register" mode="register" />
-      : <StatePanel state="empty" title={`${title} is not available yet`}
-        description="Account forms will be available here soon." />}
+      : <Recovery key={location.pathname} reset={Boolean(matchPath('/reset-password', location.pathname))} />}
   </>;
 }
 
@@ -126,7 +127,7 @@ export function Shell() {
             } />)}
           </Route>
           {authRoutes.map(route => <Route key={route.path} path={route.path}
-            element={<AuthPage title={route.title} session={user} />} />)}
+            element={<AuthPage session={user} />} />)}
           <Route path="*" element={<StatePanel state="error" title="We couldn’t find that page"
             description="Check the address or return to your workspace."
             action={<Link to="/profile">Return to workspace</Link>} />} />
