@@ -1,13 +1,18 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import FastAPI, Response
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.concurrency import run_in_threadpool
 
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
+from job_hunter.application.accounts import RegisterAccount
+from job_hunter.domain.accounts import InvalidRegistration, Registration
+from job_hunter.infrastructure.accounts import Argon2Passwords, PostgresAccounts
 from job_hunter.infrastructure.database import Database
 from job_hunter.settings import Settings, load_settings
 
@@ -18,6 +23,16 @@ class HealthResponse(BaseModel):
 
 class ReadinessResponse(BaseModel):
     status: Literal["ok", "unavailable"]
+
+
+class RegistrationRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+    email: str = Field(min_length=3, max_length=320)
+    password: SecretStr = Field(min_length=15, max_length=128)
+
+
+class RegistrationResult(BaseModel):
+    status: Literal["accepted"] = "accepted"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -53,5 +68,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ready = database is not None and database.is_ready()
         response.status_code = 200 if ready else 503
         return ReadinessResponse(status="ok" if ready else "unavailable")
+
+    registration = (
+        RegisterAccount(
+            PostgresAccounts(database), Argon2Passwords(), lambda: datetime.now(UTC)
+        )
+        if database is not None
+        else None
+    )
+
+    @app.post("/api/auth/register", status_code=202)
+    def register(body: RegistrationRequest) -> RegistrationResult:
+        try:
+            request = Registration(body.email, body.password.get_secret_value())
+        except InvalidRegistration as error:
+            raise RequestValidationError(
+                [
+                    {
+                        "loc": ("body", error.field_name),
+                        "msg": "Invalid value.",
+                        "type": "value_error",
+                    }
+                ]
+            ) from None
+        if registration is None:
+            raise HTTPException(503)
+        registration.execute(request)
+        return RegistrationResult()
 
     return app

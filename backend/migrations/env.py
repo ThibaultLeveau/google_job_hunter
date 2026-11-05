@@ -1,5 +1,6 @@
 from alembic import context
 
+from job_hunter.infrastructure import accounts  # noqa: F401 -- register account tables
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.tasks import TaskRecord
 from job_hunter.settings import load_settings
