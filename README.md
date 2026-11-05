@@ -230,6 +230,26 @@ credential before issuing a session. Reset never creates a password identity or 
 Mail and expiry tasks reuse encrypted delivery, bounded SMTP retries and cleanup; no raw token enters
 task payloads, API responses or logs. The recovery UI arrives in #23.
 
+### Google sign-in
+
+Set server-only `JOB_HUNTER_GOOGLE_CLIENT_ID`, `JOB_HUNTER_GOOGLE_CLIENT_SECRET` and
+`JOB_HUNTER_GOOGLE_REDIRECT_URI` together. Register the exact callback URL ending in
+`/api/auth/google/callback` in Google; HTTPS is required outside localhost/127.0.0.1.
+Without these settings, `GET /api/auth/providers` returns `{"google": false}`; partial
+configuration fails startup. Database and the existing mail settings are also required.
+Navigate to `GET /api/auth/google/start`. Authlib requests only `openid email profile`
+with nonce and S256 PKCE. Browser/session-bound state is encrypted with `JOB_HUNTER_MAIL_KEY`,
+expires after five minutes and is consumed before exchange. Failed exchanges require a new start.
+Google responses are limited to 64 KiB with five-second I/O timeouts and a 15-second read budget;
+discovery must match the fixed Google issuer/endpoints. No provider tokens are persisted.
+The callback redirects to `JOB_HUNTER_MAIL_PUBLIC_URL/login#google=` followed by `signed_in`,
+`cancelled`, `failed` or `linking_required`, clearing the flow cookie and callback query.
+Uvicorn receives a scrubbed query; any reverse proxy must also omit callback query strings from logs.
+New accounts use the verified email claim; existing issuer/subject identities retain their stored
+email and verification state. Email conflicts never link accounts. Linking is #18; UI handling is #23.
+The migration downgrade logs Google sessions out. Tests expose `OidcTransport` in `test_oidc.py`
+for local signed-token/JWKS/code fixtures; normal CI does not contact Google.
+
 ### Local PostgreSQL and migrations
 
 From the root, start the development-only database (Docker Compose required):
