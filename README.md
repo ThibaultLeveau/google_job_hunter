@@ -5,7 +5,7 @@ run grouped Google searches, and inspect public job evidence and private profile
 
 **Current state:** the backend bootstrap provides a typed FastAPI app factory and a credential-free
 liveness endpoint. Architecture and contribution contracts are established.
-The React frontend provides an accessible workspace preview and local API proxy.
+The React frontend provides a responsive session-aware shell, guarded routes and local API proxy.
 Backend and frontend GitHub Actions checks enforce lint, strict types and coverage.
 PostgreSQL/pgvector, explicit transaction sessions and Alembic schema setup are available.
 Backend CI runs migrations and isolated real-database tests. The durable task store is available;
@@ -90,7 +90,8 @@ npm run dev
 
 Open `http://127.0.0.1:5173`. Run the backend on port 8000 using the command above;
 Vite forwards same-origin `/api` requests there. Production hosting must provide the same-origin
-API boundary; `npm run preview` serves only the built UI at `http://127.0.0.1:4173`.
+API boundary and serve `index.html` for frontend route requests, including direct page reloads;
+`npm run preview` serves only the built UI at `http://127.0.0.1:4173`.
 Keep provider secrets server-side and never place them in `VITE_*` variables.
 
 Run the same frontend commands as the `Frontend quality` GitHub check:
@@ -142,6 +143,25 @@ Logout and `clearSession` cancel pending requests, clear private caches and publ
 to mounted consumers. Identity replacement updates those consumers immediately. Session refresh
 also discards private data when the identity or CSRF token changes. Logout failures still clear local
 data and propagate the error; they do not prove the server session was revoked. No cache is persisted.
+
+The router exposes public `/login`, `/register`, `/verify-email`, `/forgot-password` and
+`/reset-password` routes. `/profile`, `/searches`, `/jobs` and `/settings` wait for a successful
+session check; anonymous visitors go to login with a validated `returnTo` path. Return paths must
+stay within these workspace route families; external, malformed and auth-loop targets use `/profile`.
+Session failures offer a retry, expiry explains the redirect, and sign-out reports success only when
+the server confirms it. Missing routes and unexpected render errors offer recovery actions.
+Authentication forms and actual workspace feature content arrive in their owning roadmap issues;
+these route containers currently explain availability without inventing profile or job data.
+
+Navigation stays visible at mobile widths. Route changes update the title and focus the main
+container; the initial Tab reaches the skip link. The account disclosure uses ordinary Tab order,
+Enter/Space activation and Escape to close and restore its trigger. Issue #21's recorded Chromium
+keyboard pass covered skip-to-main, account/settings navigation, Escape, workspace links and sign-out.
+The real API and isolated PostgreSQL journey verified safe redirects, cookie sessions, expiry and
+sign-out cache clearing. All six 320/768/1440px × 100%/200% text layouts passed with long labels,
+reduced motion, no horizontal overflow and no automated WCAG A/AA violations. Representative
+[desktop](docs/validation/issue-21-desktop.jpg) and [mobile](docs/validation/issue-21-mobile.jpg)
+captures were visually checked. Browser checks are local evidence; browser CI arrives in #67.
 
 Shared interface primitives live in `frontend/src/shared/ui.tsx`; color, spacing, type, radius and
 focus tokens live in `frontend/src/styles.css`. Use `Button` with `primary`, `secondary` or `danger`
