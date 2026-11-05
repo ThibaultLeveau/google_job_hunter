@@ -3,10 +3,8 @@ import socket
 import subprocess
 import sys
 import traceback
-from collections.abc import Iterator
 from io import StringIO
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 from alembic import command
@@ -14,20 +12,12 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, InvalidRequestError
 
 from job_hunter.app import create_app
 from job_hunter.infrastructure.database import Database
 from job_hunter.settings import ConfigurationError, Settings, load_settings
-
-
-@pytest.fixture(autouse=True)
-def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in os.environ:
-        if name.startswith("JOB_HUNTER_"):
-            monkeypatch.delenv(name)
 
 
 @pytest.fixture
@@ -204,54 +194,31 @@ def migration_config(output: StringIO | None = None) -> Config:
 def test_initial_migration_has_one_head_and_offline_sql() -> None:
     output = StringIO()
     config = migration_config(output)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0001_vector"]
+    assert len(ScriptDirectory.from_config(config).get_heads()) == 1
     command.upgrade(config, "head", sql=True)
     assert "CREATE EXTENSION vector" in output.getvalue()
     command.downgrade(config, "head:base", sql=True)
     assert "DROP EXTENSION vector" in output.getvalue()
 
 
-@pytest.fixture
-def isolated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[Database]:
-    admin_url = os.environ.get("TEST_DATABASE_URL")
-    if not admin_url:
-        pytest.skip(
-            "Set TEST_DATABASE_URL to run real PostgreSQL tests; no SQLite fallback"
-        )
-    name = "test_" + uuid4().hex
-    admin = create_engine(admin_url, isolation_level="AUTOCOMMIT", hide_parameters=True)
-    with admin.connect() as connection:
-        connection.execute(text(f'CREATE DATABASE "{name}"'))
-    url = make_url(admin_url).set(database=name).render_as_string(hide_password=False)
-    database = Database(Settings(database_url=SecretStr(url), database_pool_size=1))
-    monkeypatch.setenv("JOB_HUNTER_DATABASE_URL", url)
-    try:
-        yield database
-    finally:
-        database.close()
-        with admin.connect() as connection:
-            connection.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
-        admin.dispose()
-
-
 @pytest.mark.integration
-def test_fresh_migration_and_readiness(isolated_database: Database) -> None:
+def test_fresh_migration_and_readiness(empty_database: Database) -> None:
     config = migration_config()
     command.upgrade(config, "head")
-    with isolated_database.transaction() as session:
+    with empty_database.transaction() as session:
         assert session.scalar(
             text("SELECT extversion FROM pg_extension WHERE extname='vector'")
         )
         assert (
             session.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0001_vector"
+            == ScriptDirectory.from_config(config).get_current_head()
         )
     with TestClient(create_app()) as client:
         response = client.get("/api/health/ready")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
     command.downgrade(config, "base")
-    with isolated_database.transaction() as session:
+    with empty_database.transaction() as session:
         assert (
             session.scalar(
                 text("SELECT count(*) FROM pg_extension WHERE extname='vector'")
