@@ -1,7 +1,11 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from email_validator import EmailNotValidError, validate_email
+
+from job_hunter.domain.errors import DomainError
 
 
 class InvalidRegistration(ValueError):
@@ -34,3 +38,21 @@ class Registration:
         except EmailNotValidError:
             raise InvalidRegistration("email") from None
         object.__setattr__(self, "normalized_email", address.normalized.lower())
+
+
+class Unauthenticated(Exception):
+    def __init__(self) -> None:
+        super().__init__("Authentication is required.")
+
+
+@dataclass(frozen=True)
+class SessionUser:
+    user_id: UUID
+    email: str = field(repr=False)
+    email_verified: bool
+    authenticated_at: datetime
+    auth_method: str
+
+    def require_owner(self, owner_id: UUID) -> None:
+        if self.user_id != owner_id:
+            raise DomainError("not_found")

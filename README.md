@@ -141,7 +141,22 @@ Unknown Origin/Host values are rejected, and credentialed CORS permits only conf
 explicit methods/headers. Requests without Origin still require a trusted Host. API responses use
 no-store, nosniff, frame/referrer restrictions and a restrictive CSP; HTTPS responses add HSTS.
 Bodies are buffered within the byte limit before handlers run, with a ten-second receive deadline;
-declared or streamed excess returns 413. Upload parsing and session/CSRF policy belong to later issues.
+declared or streamed excess returns 413. Upload parsing belongs to later issues.
+
+Password login uses `POST /api/auth/login` with JSON email/password and an exact allowed `Origin`.
+The response contains the current user and a session-bound `csrf_token`; the opaque session token
+is sent only in a host-only `job_hunter_session` cookie, scoped to `/api`, with `HttpOnly`, `Secure`,
+`SameSite=Lax` and a 12-hour absolute lifetime. Use HTTPS outside loopback development.
+`GET /api/auth/me` returns the current user and CSRF token. Authenticated unsafe requests require
+both an allowed `Origin` and `X-CSRF-Token`, including another login and `POST /api/auth/logout`.
+Login rotates the token and revokes the previous session; logout revokes it and clears the cookie.
+Do not put session tokens in browser storage. Missing, invalid, expired or revoked sessions return
+`401 unauthenticated`; invalid credentials use that same safe result. Email verification and
+attempt limits remain later issues. Last-seen updates never refresh authentication recency or expiry.
+
+Protected routes depend on `job_hunter.api.sessions.authenticated_user`. Scope private queries by
+its `user_id`, never a submitted owner; return 404 for absent or foreign records. When a loaded
+record needs an ownership check, `SessionUser.require_owner` applies the same 404 convention.
 
 ### Local PostgreSQL and migrations
 

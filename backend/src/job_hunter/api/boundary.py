@@ -12,7 +12,7 @@ from job_hunter.settings import Settings
 
 logger = logging.getLogger(__name__)
 METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-HEADERS = {"content-type", "x-request-id"}
+HEADERS = {"content-type", "x-request-id", "x-csrf-token"}
 
 
 class RequestBoundary:
