@@ -47,7 +47,11 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
 
     assert first is not second
     assert first.openapi() == second.openapi()
-    assert list(first.openapi()["paths"]) == ["/api/health/live", "/api/health/ready"]
+    assert list(first.openapi()["paths"]) == [
+        "/api/health/live",
+        "/api/health/ready",
+        "/api/auth/register",
+    ]
     first.dependency_overrides[load_settings] = lambda: Settings(docs_enabled=True)
     assert second.dependency_overrides == {}
 
