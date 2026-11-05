@@ -10,6 +10,7 @@ __pycache__/
 htmlcov/
 coverage.xml
 /backend/reports/
+/frontend/reports/
 dist/
 build/
 node_modules/
