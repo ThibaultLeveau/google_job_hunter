@@ -364,7 +364,7 @@ The callback redirects to `JOB_HUNTER_MAIL_PUBLIC_URL/login#google=` followed by
 Uvicorn receives a scrubbed query; any reverse proxy must also omit callback query strings from logs.
 New accounts use the verified email claim; existing issuer/subject identities retain their stored
 email and verification state. Email conflicts never link accounts; the sign-in screen explains the
-separate authenticated linking action. The identity-linking settings screen remains planned for #24.
+separate authenticated linking action. The identity-linking settings screen remains planned for #64.
 The migration downgrade logs Google sessions out. Tests expose `OidcTransport` in `test_oidc.py`
 for local signed-token/JWKS/code fixtures; normal CI does not contact Google.
 
