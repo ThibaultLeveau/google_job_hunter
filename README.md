@@ -114,8 +114,9 @@ Reserve space for tests/configuration within the ten-file limit; add feature lay
 | `backend/tests/test_health.py` | Health, deterministic startup and invalid-settings behavior |
 | `.gitignore` | Shared exclusions, if absent |
 | `README.md` | Verified local commands and configuration contract |
+| `AGENTS.md` | Review-and-merge delivery policy |
 
-This uses eight of ten file slots, including the lockfile and documentation.
+This uses nine of ten file slots, including the lockfile and documentation.
 Database, worker and feature modules belong to their later issues.
 
 | Frontend issue #4 file | Purpose |
