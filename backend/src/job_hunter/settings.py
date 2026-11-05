@@ -1,5 +1,7 @@
-from pydantic import ValidationError
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 
 class ConfigurationError(ValueError):
@@ -14,6 +16,29 @@ class Settings(BaseSettings):
     )
 
     docs_enabled: bool = False
+    database_url: SecretStr | None = None
+    database_pool_size: int = Field(default=5, ge=1, le=20)
+
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        try:
+            url = make_url(value.get_secret_value())
+            valid = (
+                url.drivername == "postgresql+psycopg"
+                and bool(url.host)
+                and "," not in (url.host or "")
+                and bool(url.database)
+                and set(url.query) <= {"sslmode", "sslrootcert"}
+            )
+            _ = url.port
+        except ArgumentError, ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("Use a single-host postgresql+psycopg URL.")
+        return value
 
 
 def load_settings() -> Settings:
