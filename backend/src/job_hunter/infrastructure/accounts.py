@@ -170,7 +170,9 @@ class SessionRecord(Base):
         UniqueConstraint("token_hash", name="uq_sessions_token"),
         CheckConstraint("token_hash ~ '^[0-9a-f]{64}$'", name="ck_sessions_token"),
         CheckConstraint("expires_at > authenticated_at", name="ck_sessions_expiry"),
-        CheckConstraint("auth_method = 'password'", name="ck_sessions_method"),
+        CheckConstraint(
+            "auth_method IN ('password', 'google')", name="ck_sessions_method"
+        ),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True)
     user_id: Mapped[UUID] = mapped_column(
@@ -613,3 +615,17 @@ class RecoveryDeliveryRecord(Base):
         ForeignKey("password_recoveries.id", ondelete="CASCADE"), primary_key=True
     )
     encrypted_token: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class OidcFlowRecord(Base):
+    __tablename__ = "oidc_flows"
+    __table_args__ = (
+        UniqueConstraint("state_hash", name="uq_oidc_state"),
+        Index("ix_oidc_expiry", "expires_at"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    state_hash: Mapped[str] = mapped_column(String(64))
+    binding_hash: Mapped[str] = mapped_column(String(64))
+    previous_hash: Mapped[str] = mapped_column(String(64))
+    encrypted_flow: Mapped[bytes] = mapped_column(LargeBinary)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

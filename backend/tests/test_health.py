@@ -90,6 +90,9 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
     assert list(first.openapi()["paths"]) == [
         "/api/health/live",
         "/api/health/ready",
+        "/api/auth/providers",
+        "/api/auth/google/start",
+        "/api/auth/google/callback",
         "/api/auth/register",
         "/api/auth/verify",
         "/api/auth/resend-verification",

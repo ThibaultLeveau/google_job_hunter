@@ -1,16 +1,20 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import QueryParams
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import RedirectResponse
 
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
 from job_hunter.api.sessions import (
+    COOKIE,
     authenticated_user,
     browser_guard,
     limit_auth,
@@ -19,8 +23,9 @@ from job_hunter.api.sessions import (
 from job_hunter.api.sessions import router as sessions_router
 from job_hunter.application.accounts import RegisterAccount, VerifyEmail
 from job_hunter.application.auth_limits import AuthLimits
+from job_hunter.application.oidc import ConsentCancelled, GoogleSignIn, LinkingRequired
 from job_hunter.application.recovery import PasswordRecovery
-from job_hunter.application.sessions import Sessions
+from job_hunter.application.sessions import LIFETIME, Sessions
 from job_hunter.domain.accounts import InvalidRegistration, Registration, SessionUser
 from job_hunter.infrastructure.accounts import (
     Argon2Passwords,
@@ -29,6 +34,12 @@ from job_hunter.infrastructure.accounts import (
     PostgresSessions,
 )
 from job_hunter.infrastructure.database import Database
+from job_hunter.infrastructure.oidc import (
+    CALLBACK,
+    GoogleProvider,
+    PostgresOidc,
+    load_google_settings,
+)
 from job_hunter.infrastructure.recovery import PostgresRecovery
 from job_hunter.settings import Settings, load_settings
 
@@ -105,6 +116,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(app)
     app.add_middleware(RequestBoundary, settings=config)
 
+    @app.middleware("http")
+    async def discard_callback_query(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        if request.scope["path"].rstrip("/") == CALLBACK:
+            raw = request.scope["query_string"]
+            request.scope["query_string"] = b""
+            request.state.google_query = QueryParams(raw if len(raw) <= 4096 else b"")
+        return await call_next(request)
+
     @app.get("/api/health/live")
     def health() -> HealthResponse:
         return HealthResponse()
@@ -135,6 +156,87 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if database is not None and accounts is not None
         else None
     )
+
+    google = load_google_settings()
+    app.state.google_sign_in = (
+        GoogleSignIn(
+            PostgresOidc(
+                database, accounts.verification.settings.key.get_secret_value()
+            ),
+            GoogleProvider(google),
+            lambda: datetime.now(UTC),
+        )
+        if google is not None and database is not None and accounts is not None
+        else None
+    )
+    result_url = (
+        accounts.verification.settings.public_url + "/login"
+        if accounts is not None
+        else "/login"
+    )
+    flow_cookie, flow_path = "job_hunter_oidc", "/api/auth/google"
+
+    @app.get("/api/auth/providers")
+    def providers() -> dict[str, bool]:
+        return {"google": app.state.google_sign_in is not None}
+
+    @app.get("/api/auth/google/start")
+    def google_start(request: Request) -> Response:
+        service = cast(GoogleSignIn | None, app.state.google_sign_in)
+        if service is None:
+            raise HTTPException(503)
+        limit_auth(request, "oauth_start")
+        url, binding = service.start(request.cookies.get(COOKIE, ""))
+        response = RedirectResponse(url, status_code=302)
+        response.set_cookie(
+            flow_cookie,
+            binding,
+            max_age=300,
+            path=flow_path,
+            secure=True,
+            httponly=True,
+            samesite="lax",
+        )
+        return response
+
+    @app.get(CALLBACK)
+    def google_callback(request: Request) -> Response:
+        token, outcome = "", "failed"
+        try:
+            service = cast(GoogleSignIn | None, app.state.google_sign_in)
+            query = cast(QueryParams, request.state.google_query)
+            if service is not None and all(
+                len(query.getlist(key)) <= 1 for key in ("state", "code", "error")
+            ):
+                token = service.finish(
+                    query.get("state", ""),
+                    request.cookies.get(flow_cookie, ""),
+                    request.cookies.get(COOKIE, ""),
+                    query.get("code", ""),
+                    query.get("error", ""),
+                )
+                outcome = "signed_in"
+        except ConsentCancelled:
+            outcome = "cancelled"
+        except LinkingRequired:
+            outcome = "linking_required"
+        except Exception:
+            pass
+        response = RedirectResponse(result_url + "#google=" + outcome, status_code=303)
+        if token:
+            response.set_cookie(
+                COOKIE,
+                token,
+                max_age=int(LIFETIME.total_seconds()),
+                path="/api",
+                secure=True,
+                httponly=True,
+                samesite="lax",
+            )
+        response.delete_cookie(
+            flow_cookie, path=flow_path, secure=True, httponly=True, samesite="lax"
+        )
+        return response
 
     @app.post("/api/auth/register", status_code=202)
     def register(body: RegistrationRequest, request: Request) -> RegistrationResult:
