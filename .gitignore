@@ -11,6 +11,7 @@ htmlcov/
 coverage.xml
 /backend/reports/
 /frontend/reports/
+/frontend/generated/
 dist/
 build/
 node_modules/
