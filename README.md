@@ -8,7 +8,7 @@ liveness endpoint. Architecture and contribution contracts are established.
 The React frontend provides an accessible workspace preview and local API proxy.
 Backend and frontend GitHub Actions checks enforce lint, strict types and coverage.
 PostgreSQL/pgvector, explicit transaction sessions and Alembic schema setup are available.
-Worker setup and database integration in CI remain planned.
+Backend CI runs migrations and isolated real-database tests. Worker setup remains planned.
 
 - Read [the architecture](docs/architecture.md) for product scope, ownership, recovery and operator settings.
 - Read [the contribution rules](AGENTS.md) before implementation.
@@ -46,12 +46,15 @@ Liveness does not contact external services or report configuration values.
 It requires no database, provider account or credentials.
 
 Run the implemented backend checks from `backend/`:
+Start [local PostgreSQL](#local-postgresql-and-migrations) first and set
+`TEST_DATABASE_URL` to its URL for the same complete suite used by CI.
 
 ```bash
 uv run --locked ruff format --check .
 uv run --locked ruff check .
 uv run --locked mypy
-uv run --locked pytest --cov --cov-report=term-missing \
+uv run --locked python scripts/check_migration_heads.py
+uv run --locked pytest --require-database --cov --cov-report=term-missing \
   --cov-report=json:reports/coverage.json --cov-report=xml:reports/coverage.xml \
   --junitxml=reports/junit.xml
 uv run --locked python scripts/check_coverage.py reports/coverage.json
@@ -60,7 +63,7 @@ uv run --locked python scripts/check_coverage.py reports/coverage.json
 Mypy runs in strict mode for source, quality scripts and tests. Tests inject local settings and
 exercise actual server startup failure with a synthetic credential canary to verify redacted output.
 The coverage gate independently requires 90% lines and 85% branches without rounding up.
-It measures all backend application source and quality scripts, with no source or branch
+It measures all backend application source, quality scripts and migrations, with no source or branch
 exclusions. Test code is not part of the coverage denominator. A measured branch-free codebase
 counts as 100% branch coverage; missing branch instrumentation or empty line coverage fails.
 
@@ -69,6 +72,10 @@ It uses pinned actions and uv 0.13.7, read-only repository access, a ten-minute 
 cancels superseded runs. The uv cache includes the runner platform, Python and lockfile identity;
 only pushes to `main` save it. Failures upload available JUnit and coverage reports for seven days.
 Tests still run after lint failure when installation succeeds, so failure reports remain useful.
+The job waits for the pinned pgvector PostgreSQL service health check, rejects zero or multiple
+migration heads and upgrades its empty database before testing. Service credentials are disposable
+CI fixtures; fork PRs need no secrets or write access. `--require-database` rejects a missing
+`TEST_DATABASE_URL` instead of silently skipping integration tests.
 Validate workflow syntax locally with `actionlint .github/workflows/backend.yml` from the root.
 
 The frontend uses Node 26.13.0 and npm 11.20.0, pinned in `frontend/package.json`.
@@ -170,15 +177,22 @@ caller's transaction, share sessions or hold a transaction during external provi
 Run real database tests locally after starting Compose, from `backend/`:
 
 ```bash
-TEST_DATABASE_URL="$JOB_HUNTER_DATABASE_URL" uv run --locked pytest -m integration
+export TEST_DATABASE_URL="$JOB_HUNTER_DATABASE_URL"
+uv run --locked python scripts/check_migration_heads.py
+uv run --locked pytest --require-database -m integration
 ```
 
-The test role must create/drop databases. Each integration test creates a randomly named database,
-then closes connections and drops only that database. Tests cover fresh extension migrations and
+The test role must create/drop databases. Shared fixtures in `backend/tests/conftest.py` provide
+`empty_database` for migration tests and `isolated_database` with all migrations applied for feature
+tests. Each creates a randomly named database, then closes connections and drops only that database,
+including when the test or migration fails. Mark database tests `integration`. Keep integration
+execution sequential: the fixtures reject xdist workers when a database URL is present; parallel
+support requires a separate verified isolation change. Tests cover fresh extension migrations and
 downgrade/upgrade, readiness, failed-transaction rollback, committed inserts, session closure,
 pool exhaustion and statement timeout. They never substitute SQLite or mock transaction semantics.
 Without `TEST_DATABASE_URL`, these tests explicitly skip; ordinary tests still verify redacted
-database-down readiness, settings and offline migration SQL. CI database service wiring arrives in #8.
+database-down readiness, settings and offline migration SQL. Use `pytest -m 'not integration'` for
+an intentional unit-only run; full verification and CI use `--require-database`.
 
 The following are **planned command contracts, not working setup instructions**.
 They were checked against the linked foundation issues; those PRs must implement and verify them.
@@ -186,7 +200,6 @@ Supported Python/Node minors and dependency versions are deliberately resolved a
 
 | Available after | Working directory | Planned commands or contract |
 | --- | --- | --- |
-| [#8](https://github.com/ThibaultLeveau/google_job_hunter/issues/8) | `backend/` | Supplies integration invocation, fresh migrations and single-head verification in CI |
 | [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11) | `backend/` | Supplies the separate worker command and registered handlers |
 | [#20](https://github.com/ThibaultLeveau/google_job_hunter/issues/20) | Backend / frontend | Supplies deterministic OpenAPI export and ignored type generation before frontend checks/build/tests |
 

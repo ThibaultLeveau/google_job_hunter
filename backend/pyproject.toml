@@ -48,7 +48,7 @@ files = ["src", "scripts", "tests", "migrations"]
 
 [tool.coverage.run]
 branch = true
-source = ["src/job_hunter", "scripts"]
+source = ["src/job_hunter", "scripts", "migrations"]
 
 [tool.coverage.report]
 show_missing = true

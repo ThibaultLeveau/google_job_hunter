@@ -17,6 +17,21 @@ jobs:
     name: Backend quality
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:5895949dfcdf308eb0cd31c950c93c14895c77f33fbedfecf1fa511ab1d4bcd2
+        env:
+          POSTGRES_USER: job_hunter
+          POSTGRES_PASSWORD: ci-fixture-only
+          POSTGRES_DB: job_hunter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U job_hunter -d job_hunter"
+          --health-interval 2s --health-timeout 3s
+          --health-retries 15 --health-start-period 10s
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://job_hunter:ci-fixture-only@127.0.0.1:5432/job_hunter
     defaults:
       run:
         working-directory: backend
@@ -48,11 +63,16 @@ jobs:
           uv run --locked ruff check .
           uv run --locked mypy
 
+      - name: Verify single head and migrate empty database
+        run: |
+          uv run --locked python scripts/check_migration_heads.py
+          JOB_HUNTER_DATABASE_URL="$TEST_DATABASE_URL" uv run --locked alembic upgrade head
+
       - name: Test with branch coverage
         id: tests
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: >-
-          uv run --locked pytest --cov --cov-report=term-missing
+          uv run --locked pytest --require-database --cov --cov-report=term-missing
           --cov-report=json:reports/coverage.json --cov-report=xml:reports/coverage.xml
           --junitxml=reports/junit.xml
 
