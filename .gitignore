@@ -12,6 +12,8 @@ coverage.xml
 /backend/reports/
 dist/
 build/
+node_modules/
+*.tsbuildinfo
 .env
 .env.*
 !.env.example
