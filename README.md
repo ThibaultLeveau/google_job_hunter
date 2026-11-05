@@ -116,6 +116,25 @@ verified action pins, bounded timeouts and cancel superseded runs. The npm cache
 downloads keyed by platform and lockfile; it does not cache `node_modules` or build output.
 Validate both workflows with `actionlint .github/workflows/*.yml` from the repository root.
 
+Shared interface primitives live in `frontend/src/shared/ui.tsx`; color, spacing, type, radius and
+focus tokens live in `frontend/src/styles.css`. Use `Button` with `primary`, `secondary` or `danger`
+tone and a visible action label. Buttons default to `type="button"`; opt into `type="submit"` for
+forms. Set controlled `loading` immediately when submission starts and clear it when it settles.
+Loading disables activation and displays `loadingLabel` (default `Working…`); the caller owns the
+async lifecycle. Plain disabled buttons remain readable and leave the keyboard tab sequence.
+Use `Field` for a labeled text input with optional description, required marker and associated error.
+It preserves native input props/ref and any external `aria-describedby`; standalone `Input` needs
+an associated label or accessible name from its caller. Labels, errors and status text remain plain
+text. `Badge` takes visible text plus `neutral`, `accent` or `danger` tone. `StatePanel` takes a title,
+description, optional action and `loading`, `empty`, `error`, `unsupported`, `unknown` or `stale` state.
+Choose a useful next action for recoverable states. The shared styles wrap long text, use system
+fonts and turn off spinner motion/transitions when reduced motion is requested.
+Component tests cover keyboard/disabled/loading behavior, field associations and token contrast.
+The issue #19 validation preview was checked at 320/768/1440px and 100%/200% text scaling, including
+long text, with a keyboard pass and no automated WCAG A/AA violations in Chromium. Representative
+[desktop](docs/validation/issue-19-desktop.jpg) and [mobile](docs/validation/issue-19-mobile.jpg)
+captures show these primitives; the temporary preview is not an application page.
+
 Settings are read for each app creation and validated before serving requests:
 
 | Environment variable | Default | Behavior |
