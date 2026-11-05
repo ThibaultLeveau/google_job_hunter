@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
+from job_hunter.domain.accounts import Unauthenticated
 from job_hunter.domain.errors import DomainError
 
 ERRORS = {
     400: ("bad_request", "The request is invalid."),
+    401: ("unauthenticated", "Authentication is required."),
     403: ("forbidden", "The request is not allowed."),
     404: ("not_found", "The requested resource was not found."),
     405: ("method_not_allowed", "This method is not allowed."),
@@ -81,6 +83,8 @@ def install_error_handlers(app: FastAPI) -> None:
         if isinstance(error, RequestValidationError):
             status = 422
             fields = validation_fields(request, error)
+        elif isinstance(error, Unauthenticated):
+            status = 401
         elif isinstance(error, DomainError):
             status = 404 if error.code == "not_found" else 409
         else:
@@ -95,5 +99,10 @@ def install_error_handlers(app: FastAPI) -> None:
             response.headers["Allow"] = error.headers["Allow"]
         return response
 
-    for exception in (RequestValidationError, DomainError, HTTPException):
+    for exception in (
+        RequestValidationError,
+        DomainError,
+        Unauthenticated,
+        HTTPException,
+    ):
         app.add_exception_handler(exception, handle)

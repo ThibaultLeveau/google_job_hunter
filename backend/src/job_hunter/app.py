@@ -3,16 +3,23 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.concurrency import run_in_threadpool
 
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
+from job_hunter.api.sessions import browser_guard
+from job_hunter.api.sessions import router as sessions_router
 from job_hunter.application.accounts import RegisterAccount
+from job_hunter.application.sessions import Sessions
 from job_hunter.domain.accounts import InvalidRegistration, Registration
-from job_hunter.infrastructure.accounts import Argon2Passwords, PostgresAccounts
+from job_hunter.infrastructure.accounts import (
+    Argon2Passwords,
+    PostgresAccounts,
+    PostgresSessions,
+)
 from job_hunter.infrastructure.database import Database
 from job_hunter.settings import Settings, load_settings
 
@@ -54,7 +61,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url="/openapi.json" if config.docs_enabled else None,
         lifespan=lifespan,
+        dependencies=[Depends(browser_guard)],
         responses={status: {"model": ErrorEnvelope} for status in ERRORS},
+    )
+    app.state.allowed_origins = config.allowed_origins
+    app.state.sessions = (
+        Sessions(
+            PostgresSessions(database),
+            Argon2Passwords().verify,
+            lambda: datetime.now(UTC),
+        )
+        if database is not None
+        else None
     )
     install_error_handlers(app)
     app.add_middleware(RequestBoundary, settings=config)
@@ -96,4 +114,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         registration.execute(request)
         return RegistrationResult()
 
+    app.include_router(sessions_router)
     return app

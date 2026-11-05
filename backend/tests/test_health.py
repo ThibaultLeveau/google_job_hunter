@@ -1,21 +1,40 @@
+import json
 import os
 import socket
 import subprocess
 import sys
 import traceback
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
+from typing import Annotated, cast
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
-from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, InvalidRequestError
+from sqlalchemy import select, text, update
+from sqlalchemy.exc import DBAPIError, IntegrityError, InvalidRequestError
+from sqlalchemy.pool import QueuePool
 
+from job_hunter.api.sessions import COOKIE, authenticated_user
 from job_hunter.app import create_app
+from job_hunter.application.sessions import LIFETIME, Sessions, csrf_token, token_hash
+from job_hunter.domain.accounts import Registration, SessionUser, Unauthenticated
+from job_hunter.domain.errors import DomainError
+from job_hunter.infrastructure.accounts import (
+    Argon2Passwords,
+    AuthIdentityRecord,
+    PostgresAccounts,
+    PostgresSessions,
+    SessionRecord,
+    UserRecord,
+)
 from job_hunter.infrastructure.database import Database
 from job_hunter.settings import ConfigurationError, Settings, load_settings
 
@@ -51,6 +70,9 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
         "/api/health/live",
         "/api/health/ready",
         "/api/auth/register",
+        "/api/auth/login",
+        "/api/auth/me",
+        "/api/auth/logout",
     ]
     first.dependency_overrides[load_settings] = lambda: Settings(docs_enabled=True)
     assert second.dependency_overrides == {}
@@ -263,3 +285,344 @@ def test_query_and_pool_wait_are_bounded(isolated_database: Database) -> None:
         with isolated_database.transaction() as session:
             session.execute(text("SELECT pg_sleep(10)"))
     assert isolated_database.is_ready() is True
+
+
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
+ORIGIN = "https://testserver"
+PASSWORD = "private-session-password"
+OWN_RECORD, FOREIGN_RECORD = UUID(int=1), UUID(int=2)
+
+
+@pytest.fixture
+def client(isolated_database: Database) -> Iterator[TestClient]:
+    PostgresAccounts(isolated_database).create(
+        Registration("user@example.org", PASSWORD),
+        Argon2Passwords().hash(PASSWORD),
+        NOW,
+    )
+    app = create_app(Settings(allowed_origins=(ORIGIN,)))
+    cast(Sessions, app.state.sessions).now = lambda: NOW
+    with isolated_database.transaction() as session:
+        owner = session.scalars(select(UserRecord.id)).one()
+    records = {OWN_RECORD: owner, FOREIGN_RECORD: uuid4()}
+
+    @app.post("/api/private/{record_id}")
+    def owned(
+        record_id: UUID, user: Annotated[SessionUser, Depends(authenticated_user)]
+    ) -> dict[str, UUID]:
+        record_owner = records.get(record_id)
+        if record_owner is None:
+            raise DomainError("not_found")
+        user.require_owner(record_owner)
+        return {"owner_id": user.user_id}
+
+    with TestClient(app, base_url=ORIGIN) as browser:
+        yield browser
+
+
+def login(client: TestClient, **headers: str) -> tuple[str, str, UUID]:
+    response = client.post(
+        "/api/auth/login",
+        headers={"Origin": ORIGIN, **headers},
+        json={"email": "USER@example.org", "password": PASSWORD},
+    )
+    assert response.status_code == 200, response.text
+    return (
+        client.cookies[COOKIE],
+        response.json()["csrf_token"],
+        UUID(response.json()["id"]),
+    )
+
+
+@pytest.mark.integration
+def test_cookie_hash_storage_rotation_and_revocation(
+    client: TestClient, isolated_database: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    client.cookies.set(
+        COOKIE, "chosen-fixed-value", domain="testserver.local", path="/api"
+    )
+    response = client.post(
+        "/api/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"email": "user@example.org", "password": PASSWORD},
+    )
+    assert response.status_code == 200
+    flags = response.headers["set-cookie"]
+    for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/api", "Max-Age=43200"):
+        assert flag in flags
+    assert "Domain=" not in flags
+    token = client.cookies[COOKIE]
+    assert len(token) == 43 and token != "chosen-fixed-value"
+    csrf = response.json()["csrf_token"]
+    assert token not in response.text + caplog.text
+    with isolated_database.transaction() as session:
+        stored = session.scalars(select(SessionRecord)).one()
+        assert stored.token_hash == token_hash(token)
+        assert stored.authenticated_at == stored.last_seen_at == NOW
+        assert stored.expires_at == NOW + LIFETIME and stored.auth_method == "password"
+        assert token not in str(
+            session.execute(text("SELECT row_to_json(sessions) FROM sessions")).all()
+        )
+    new_token, new_csrf, _ = login(client, **{"X-CSRF-Token": csrf})
+    assert new_token != token and new_csrf != csrf
+    service = cast(Sessions, cast(FastAPI, client.app).state.sessions)
+    with pytest.raises(Unauthenticated):
+        service.current(token)
+    assert client.get("/api/auth/me").json()["csrf_token"] == new_csrf
+    assert client.get("/api/auth/logout").status_code == 405
+    response = client.post(
+        "/api/auth/logout", headers={"Origin": ORIGIN, "X-CSRF-Token": new_csrf}
+    )
+    assert response.status_code == 204 and "Max-Age=0" in response.headers["set-cookie"]
+    assert COOKIE not in client.cookies
+    with pytest.raises(Unauthenticated):
+        service.current(new_token)
+    assert client.get("/api/auth/me").json()["code"] == "unauthenticated"
+
+
+@pytest.mark.integration
+def test_expiry_last_seen_and_authentication_recency(
+    client: TestClient, isolated_database: Database
+) -> None:
+    token, _, _ = login(client)
+    service = cast(Sessions, cast(FastAPI, client.app).state.sessions)
+    service.now = lambda: NOW + timedelta(minutes=10)
+    assert client.get("/api/auth/me").status_code == 200
+    with isolated_database.transaction() as session:
+        stored = session.scalars(select(SessionRecord)).one()
+        assert stored.last_seen_at == service.now()
+        assert stored.authenticated_at == NOW and stored.expires_at == NOW + LIFETIME
+    service.now = lambda: NOW + LIFETIME
+    assert client.get("/api/auth/me").status_code == 401
+    assert (
+        client.post(
+            "/api/auth/logout",
+            headers={"Origin": ORIGIN, "X-CSRF-Token": csrf_token(token)},
+        ).status_code
+        == 401
+    )
+    # Expired cookies cannot fix the identity of a new password login.
+    login(client)
+
+
+@pytest.mark.parametrize(
+    ("email", "password"),
+    [
+        ("user@example.org", "incorrect-password"),
+        ("missing@example.org", PASSWORD),
+        ("missing@example.org", "dummy-verification-only-value"),
+        ("not-an-email", PASSWORD),
+        ("user@example.org", "short"),
+    ],
+)
+@pytest.mark.integration
+def test_invalid_credentials_have_one_safe_result(
+    client: TestClient, email: str, password: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    response = client.post(
+        "/api/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"email": email, "password": password},
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "unauthenticated"
+    assert response.json()["message"] == "Authentication is required."
+    assert "set-cookie" not in response.headers
+    assert password not in response.text + caplog.text
+
+
+@pytest.mark.integration
+def test_unknown_and_known_credentials_use_verification_outside_transaction(
+    client: TestClient, isolated_database: Database
+) -> None:
+    database = Database(Settings(database_pool_size=1))
+    calls: list[bool] = []
+
+    def verify(encoded: str | None, password: str) -> bool:
+        assert (
+            isinstance(database.engine.pool, QueuePool)
+            and database.engine.pool.checkedout() == 0
+        )
+        calls.append(encoded is not None)
+        return Argon2Passwords().verify(encoded, password)
+
+    service = Sessions(PostgresSessions(database), verify, lambda: NOW)
+    try:
+        for email in ("user@example.org", "missing@example.org"):
+            with pytest.raises(Unauthenticated):
+                service.login(email, "incorrect-password", "")
+        assert calls == [True, False]
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize(
+    "headers", [{}, {"Origin": "https://foreign.example"}, {"Origin": "null"}]
+)
+@pytest.mark.integration
+def test_login_csrf_is_rejected(client: TestClient, headers: dict[str, str]) -> None:
+    response = client.post(
+        "/api/auth/login",
+        headers=headers,
+        json={"email": "user@example.org", "password": PASSWORD},
+    )
+    assert response.status_code == 403 and COOKIE not in client.cookies
+
+
+@pytest.mark.integration
+def test_csrf_is_bound_to_session_and_origin_for_all_authenticated_writes(
+    client: TestClient,
+) -> None:
+    token, csrf, owner_id = login(client)
+    for headers in (
+        {},
+        {"Origin": ORIGIN},
+        {"Origin": ORIGIN, "X-CSRF-Token": "x" * 64},
+        {"X-CSRF-Token": csrf},
+        {"Origin": "https://foreign.example", "X-CSRF-Token": csrf},
+    ):
+        assert (
+            client.post(f"/api/private/{OWN_RECORD}", headers=headers).status_code
+            == 403
+        )
+    service = cast(Sessions, cast(FastAPI, client.app).state.sessions)
+    other_token = service.login("user@example.org", PASSWORD, "")
+    assert (
+        client.post(
+            f"/api/private/{OWN_RECORD}",
+            headers={"Origin": ORIGIN, "X-CSRF-Token": csrf_token(other_token)},
+        ).status_code
+        == 403
+    )
+    valid = {"Origin": ORIGIN, "X-CSRF-Token": csrf}
+    assert client.post(f"/api/private/{OWN_RECORD}", headers=valid).json() == {
+        "owner_id": str(owner_id)
+    }
+    assert client.post(f"/api/private/{uuid4()}", headers=valid).status_code == 404
+    assert (
+        client.post(f"/api/private/{FOREIGN_RECORD}", headers=valid).status_code == 404
+    )
+    assert (
+        client.post(
+            "/api/auth/login",
+            headers={"Origin": ORIGIN},
+            json={"email": "user@example.org", "password": PASSWORD},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/auth/register",
+            json={"email": "other@example.org", "password": PASSWORD},
+        ).status_code
+        == 403
+    )
+    assert service.current(token).user_id == owner_id
+
+
+@pytest.mark.integration
+def test_anonymous_routes_and_cookie_only_authentication(client: TestClient) -> None:
+    assert client.get("/api/health/live").status_code == 200
+    assert (
+        client.post(
+            "/api/auth/register",
+            json={"email": "other@example.org", "password": PASSWORD},
+        ).status_code
+        == 202
+    )
+    token, _, _ = login(client)
+    client.cookies.clear()
+    assert (
+        client.get(
+            "/api/auth/me", headers={"Authorization": "Bearer " + token}
+        ).status_code
+        == 401
+    )
+    assert client.get("/api/auth/me", params={"token": token}).status_code == 401
+    client.cookies.set(COOKIE, "malformed", domain="testserver.local", path="/api")
+    assert client.get("/api/auth/me").status_code == 401
+    assert client.get("/api/health/live").status_code == 200
+    preflight = client.options(
+        "/api/auth/logout",
+        headers={
+            "Origin": ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type, X-CSRF-Token",
+        },
+    )
+    assert preflight.status_code == 204
+    assert "x-csrf-token" in preflight.headers["access-control-allow-headers"]
+
+
+@pytest.mark.integration
+def test_credential_change_race_does_not_create_session(
+    client: TestClient, isolated_database: Database
+) -> None:
+    store = PostgresSessions(isolated_database)
+    credential = store.credential("user@example.org")
+    assert credential is not None
+    changed_hash = Argon2Passwords().hash("changed-password-value")
+    with isolated_database.transaction() as session:
+        session.execute(update(AuthIdentityRecord).values(password_hash=changed_hash))
+    with pytest.raises(Unauthenticated):
+        store.rotate(credential, "", token_hash("new"), NOW, NOW + LIFETIME)
+    with isolated_database.transaction() as session:
+        assert session.scalars(select(SessionRecord)).all() == []
+
+
+@pytest.mark.integration
+def test_session_constraints_and_missing_configuration(
+    client: TestClient, isolated_database: Database
+) -> None:
+    login(client)
+    for expression in (
+        "token_hash='plaintext'",
+        "expires_at=authenticated_at",
+        "auth_method='untrusted'",
+    ):
+        with pytest.raises(IntegrityError):
+            with isolated_database.transaction() as session:
+                session.execute(text(f"UPDATE sessions SET {expression}"))
+    with TestClient(
+        create_app(Settings(database_url=None, allowed_origins=(ORIGIN,))),
+        base_url=ORIGIN,
+    ) as unavailable:
+        assert unavailable.get("/api/auth/me").status_code == 503
+
+
+@pytest.mark.integration
+def test_login_requires_json_and_rejects_mass_assignment(client: TestClient) -> None:
+    values = {"email": "user@example.org", "password": PASSWORD}
+    response = client.post(
+        "/api/auth/login", content=json.dumps(values), headers={"Origin": ORIGIN}
+    )
+    assert response.status_code == 422
+    response = client.post(
+        "/api/auth/login",
+        content=json.dumps(values),
+        headers={"Origin": ORIGIN, "Content-Type": "application/problem+json"},
+    )
+    assert response.status_code == 415
+    response = client.post("/api/auth/login", data=values, headers={"Origin": ORIGIN})
+    assert response.status_code == 422
+    response = client.post(
+        "/api/auth/login",
+        json={**values, "user_id": str(uuid4())},
+        headers={"Origin": ORIGIN},
+    )
+    assert response.status_code == 422 and COOKIE not in client.cookies
+
+
+@pytest.mark.integration
+def test_failed_rotation_preserves_previous_session(
+    client: TestClient, isolated_database: Database
+) -> None:
+    token, _, owner = login(client)
+    store = PostgresSessions(isolated_database)
+    credential = store.credential("user@example.org")
+    assert credential is not None
+    with pytest.raises(IntegrityError):
+        store.rotate(
+            credential, token_hash(token), token_hash(token), NOW, NOW + LIFETIME
+        )
+    assert store.current(token_hash(token), NOW).user_id == owner
