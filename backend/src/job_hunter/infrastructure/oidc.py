@@ -2,7 +2,8 @@ import json
 import re
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from dataclasses import astuple
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -20,7 +21,9 @@ from sqlalchemy.exc import IntegrityError
 
 from job_hunter.application.oidc import (
     ISSUER,
+    UNKNOWN_AUTH_TIME,
     GoogleIdentity,
+    Intent,
     LinkingRequired,
     OidcFlow,
     OidcProvider,
@@ -113,12 +116,16 @@ class GoogleProvider(OidcProvider):
     ) -> None:
         self.settings, self.transport = settings, transport
 
-    def client(self) -> OAuth2Client:
+    def client(self, intent: Intent = "sign_in") -> OAuth2Client:
         assert self.settings.client_id and self.settings.client_secret
+        assert self.settings.redirect_uri is not None
+        redirect = self.settings.redirect_uri
+        if intent != "sign_in":
+            redirect = redirect.removesuffix("/callback") + f"/{intent}/callback"
         return OAuth2Client(
             self.settings.client_id.get_secret_value(),
             self.settings.client_secret.get_secret_value(),
-            redirect_uri=self.settings.redirect_uri,
+            redirect_uri=redirect,
             scope="openid email profile",
             code_challenge_method="S256",
             token_endpoint_auth_method="client_secret_post",
@@ -143,13 +150,15 @@ class GoogleProvider(OidcProvider):
 
     def authorization(self, state: str, flow: OidcFlow) -> str:
         try:
-            with self.client() as client:
+            with self.client(flow.intent) as client:
                 self.discover(client)
                 url, _ = client.create_authorization_url(
                     ENDPOINTS["authorization_endpoint"],
                     state=state,
                     nonce=flow.nonce,
                     code_verifier=flow.verifier,
+                    claims=json.dumps({"id_token": {"auth_time": {"essential": True}}}),
+                    **({"max_age": 0} if flow.intent == "reauthenticate" else {}),
                 )
                 return cast(str, url)
         except Exception:
@@ -157,7 +166,7 @@ class GoogleProvider(OidcProvider):
 
     def exchange(self, code: str, flow: OidcFlow, now: datetime) -> GoogleIdentity:
         try:
-            with self.client() as client:
+            with self.client(flow.intent) as client:
                 self.discover(client)
                 token = client.fetch_token(
                     ENDPOINTS["token_endpoint"],
@@ -198,7 +207,19 @@ class GoogleProvider(OidcProvider):
                     ):
                         raise ValueError()
                     normalize_email(email)
-                    return GoogleIdentity(subject, email)
+                    authenticated_at = UNKNOWN_AUTH_TIME
+                    proof = claims.get("auth_time")
+                    if proof is not None:
+                        if type(proof) not in {int, float}:
+                            raise ValueError()
+                        authenticated_at = datetime.fromtimestamp(proof, UTC)
+                        if not UNKNOWN_AUTH_TIME <= authenticated_at <= now:
+                            raise ValueError()
+                    if flow.intent == "reauthenticate" and (
+                        proof is None or authenticated_at.timestamp() < flow.started_at
+                    ):
+                        raise ValueError()
+                    return GoogleIdentity(subject, email, authenticated_at)
                 finally:
                     token.clear()
                     client.token = None
@@ -230,7 +251,7 @@ class PostgresOidc(OidcStore):
                     binding_hash=binding,
                     previous_hash=previous,
                     encrypted_flow=self.cipher.encrypt_at_time(
-                        json.dumps([flow.nonce, flow.verifier]).encode(),
+                        json.dumps(astuple(flow)).encode(),
                         int(now.timestamp()),
                     ),
                     expires_at=now + timedelta(minutes=5),
@@ -300,7 +321,7 @@ class PostgresOidc(OidcStore):
                             user_id=owner,
                             token_hash=digest,
                             expires_at=now + LIFETIME,
-                            authenticated_at=now,
+                            authenticated_at=identity.authenticated_at,
                             last_seen_at=now,
                             auth_method="google",
                         )

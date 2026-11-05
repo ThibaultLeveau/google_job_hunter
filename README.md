@@ -250,6 +250,35 @@ email and verification state. Email conflicts never link accounts. Linking is #1
 The migration downgrade logs Google sessions out. Tests expose `OidcTransport` in `test_oidc.py`
 for local signed-token/JWKS/code fixtures; normal CI does not contact Google.
 
+### Recent authentication and explicit linking
+
+`JOB_HUNTER_RECENT_AUTH_SECONDS` defaults to 300 (allowed 60–600). Activity updates only
+`last_seen_at`; password proof or validated Google `auth_time` establishes authentication recency.
+Google sessions without that claim have an internal epoch timestamp, exposed as `null` by
+`GET /api/auth/methods`, with `recent: false`. The migration conservatively clears legacy Google
+recency; rollback cannot restore discarded proof. Session expiry remains unchanged.
+`GET /api/auth/actions/{action}` returns `ready` or HTTP 403 with typed
+`reauthentication_required` and `action`. Actions are `link_google`, `export_data`, `delete_account`
+and `settings`; these endpoints report access status and do not perform those operations.
+Future handlers use `api.reauth.require_recent`; sensitive writes must recheck the active session
+and recency in their transaction, as linking does. `/methods` reports linked methods and current proof.
+
+With the current session, allowed Origin and CSRF token, POST `{"action":"settings","password":"…"}` to
+`/api/auth/reauthenticate/password`, or `{"action":"settings"}` to `/api/auth/google/reauthenticate`.
+POST `{"action":"link_google"}` to `/api/auth/google/link` requires recent existing-account proof.
+Google starts return `authorization_url` and a flow cookie; navigate to that URL. Register the
+additional fixed `/api/auth/google/reauthenticate/callback` and `/api/auth/google/link/callback`
+URLs at the configured callback origin. They redirect to the configured login URL with
+`#google_{intent}={result}&action={action}`; results include `reauthenticated`, `linked`, `cancelled`,
+`conflict`, `reauthentication_required` and `failed`. Only successful callbacks return their bound action.
+Fresh Google proof requests `max_age=0` and essential `auth_time`, which must be enabled in
+[Google client settings](https://developers.google.com/identity/openid-connect/openid-connect).
+Missing, future or pre-flow authentication time fails closed; the already-linked subject must match.
+Intent, user, session and action are saved in encrypted single-use flow state. Linking never changes
+email/verification or merges accounts; collisions are conflicts and same-owner links are idempotent.
+Password proof shares login limits (5/account and 30/IP per five minutes); Google starts share the
+30/IP per-five-minute OAuth budget. Callback queries stay scrubbed from application access logs.
+
 ### Local PostgreSQL and migrations
 
 From the root, start the development-only database (Docker Compose required):
