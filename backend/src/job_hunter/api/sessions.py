@@ -71,7 +71,14 @@ def browser_guard(request: Request) -> None:
         and COOKIE in request.cookies
         and request.url.path != "/api/auth/login"
     ):
-        authenticated_user(request)
+        try:
+            authenticated_user(request)
+        except Unauthenticated:
+            if request.url.path not in {
+                "/api/auth/forgot-password",
+                "/api/auth/reset-password",
+            }:
+                raise
 
 
 def verified_user(request: Request) -> SessionUser:

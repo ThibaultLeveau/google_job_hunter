@@ -14,6 +14,7 @@ from job_hunter.infrastructure.accounts import (
     load_mail_settings,
 )
 from job_hunter.infrastructure.database import Database
+from job_hunter.infrastructure.recovery import PostgresRecovery
 from job_hunter.infrastructure.worker import Handler, PostgresWorkerStore
 from job_hunter.settings import load_settings
 
@@ -42,9 +43,13 @@ def main() -> None:
         clock = SystemClock()
         mail_settings = load_mail_settings()
         verification = PostgresVerification(database, mail_settings)
+        recovery = PostgresRecovery(database, mail_settings)
         handlers = {
             **HANDLERS,
             **verification.handlers(SmtpMail(mail_settings), clock.now),
+            **recovery.handlers(
+                SmtpMail(mail_settings, "Reset your password"), clock.now
+            ),
         }
         with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
             logging.getLogger(__name__).info("Worker started.")

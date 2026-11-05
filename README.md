@@ -178,7 +178,7 @@ share an unknown-peer counter. The API uses only the ASGI client address, never 
 headers. Direct Uvicorn uses `--no-proxy-headers`; behind a proxy, enable proxy headers only with an
 explicit `--forwarded-allow-ips` list, and require that proxy to replace incoming forwarding headers.
 Never trust `*`. Limited requests return 429 with `Retry-After` seconds, also readable through CORS.
-Recovery and OAuth adapters must call `limit_auth` with their matching action when added.
+OAuth adapters must call `limit_auth` with their matching action when added.
 
 ### Email verification and mail delivery
 
@@ -212,6 +212,23 @@ Successful publication deletes the encrypted secret. A separate durable expiry t
 secrets even after mail failure; expiry cleanup requires a running worker. Failed tasks retain safe error
 codes for operational recovery. Mail content, credentials and tokens are never logged or returned by APIs.
 Tests use in-memory mail, fake clocks and real PostgreSQL; no provider credentials or external calls are required.
+
+### Password recovery
+
+`POST /api/auth/forgot-password` accepts `{"email":"…"}` and returns generic 202 acceptance for
+known, unknown and OAuth-only accounts. Only existing password identities receive mail. Requests share
+recovery limits (20 per IP/hour, 3 per email/hour); reset attempts use the same IP budget before hashing.
+The configured origin supplies `/reset-password#token=…`; no submitted redirect or owner is accepted.
+`POST /api/auth/reset-password` accepts `{"token":"…","password":"…"}` and returns generic 202 acceptance.
+Both endpoints require an allowed Origin; valid session cookies also require CSRF. Revoked/expired
+cookies do not block recovery. Invalid password fields return redacted 422 errors; passwords retain
+the registration policy. Recovery links expire after one hour, are single-use, and replace earlier links.
+
+Reset atomically consumes the token, replaces the credential and revokes all of that user's sessions.
+A changed credential invalidates previously issued recovery links; concurrent login rechecks the locked
+credential before issuing a session. Reset never creates a password identity or signs the user in.
+Mail and expiry tasks reuse encrypted delivery, bounded SMTP retries and cleanup; no raw token enters
+task payloads, API responses or logs. The recovery UI arrives in #23.
 
 ### Local PostgreSQL and migrations
 
@@ -311,7 +328,7 @@ Run the separate worker from `backend/` with the same `JOB_HUNTER_DATABASE_URL`:
 uv run --locked python -m job_hunter.worker --concurrency 2
 ```
 
-The worker registers verification-mail and expiry handlers at startup alongside the explicit
+The worker registers verification/recovery mail and expiry handlers alongside the explicit
 `job_hunter.worker.HANDLERS` registry; unknown kinds stay pending. Concurrency is 1–16 per process (default 2).
 Claims use 60-second leases, renewed every 20 seconds while handlers run outside transactions.
 Each claim consumes an attempt; expired leases are recovered in batches of at most 100 registered tasks.
