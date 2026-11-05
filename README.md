@@ -8,7 +8,8 @@ liveness endpoint. Architecture and contribution contracts are established.
 The React frontend provides an accessible workspace preview and local API proxy.
 Backend and frontend GitHub Actions checks enforce lint, strict types and coverage.
 PostgreSQL/pgvector, explicit transaction sessions and Alembic schema setup are available.
-Backend CI runs migrations and isolated real-database tests. Worker setup remains planned.
+Backend CI runs migrations and isolated real-database tests. The durable task store is available;
+worker execution, heartbeat/recovery and automatic backoff remain planned for #11.
 
 - Read [the architecture](docs/architecture.md) for product scope, ownership, recovery and operator settings.
 - Read [the contribution rules](AGENTS.md) before implementation.
@@ -209,6 +210,30 @@ pool exhaustion and statement timeout. They never substitute SQLite or mock tran
 Without `TEST_DATABASE_URL`, these tests explicitly skip; ordinary tests still verify redacted
 database-down readiness, settings and offline migration SQL. Use `pytest -m 'not integration'` for
 an intentional unit-only run; full verification and CI use `--require-database`.
+
+### Durable task store
+
+The task store already uses the same migrated database. `PostgresTaskQueue(session)` implements
+the narrow application queue port inside the caller's `database.transaction()` unit of work;
+it never commits independently. Write subject records and enqueue their task in that same session.
+Tasks store UUID subject/payload references, a positive subject revision, a bounded kind code,
+status, UTC schedule/timestamps, attempt budget, generation, fencing token and safe error code.
+The database uniquely constrains `(kind, subject_id, subject_version)`; duplicate enqueue preserves
+the task and rejects a conflicting payload reference. No raw personal content belongs in task rows.
+
+Claims use `FOR UPDATE SKIP LOCKED`, select only supplied registered kinds that are due and within
+their attempt budget, and assign a new token/expiry. Commit the short claim transaction before any
+external work. Complete/fail with the original task snapshot in a new transaction; expired or changed
+tokens/generations raise `StaleLease`. Let that exception roll back publication and any next enqueue.
+Feature use cases must authorize the referenced owner/subject and recheck its live version in the
+publication transaction. Generic UUID references cannot enforce foreign keys to every future feature.
+
+An authorized retry supplies the same logical key and observed generation. It reopens only failed
+tasks, resets attempts, advances generation and replaces the token. Concurrent/replayed retries for
+that generation share the existing result; succeeded tasks and successful artifacts are preserved.
+These internal primitives expose no HTTP retry endpoint. Worker recovery/backoff is still #11's scope.
+From `backend/`, run `uv run --locked pytest --require-database tests/test_tasks.py` with the test URL
+configured above; controlled concurrent tests use separate sessions and barriers within one test.
 
 The following are **planned command contracts, not working setup instructions**.
 They were checked against the linked foundation issues; those PRs must implement and verify them.

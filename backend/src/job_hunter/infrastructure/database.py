@@ -3,9 +3,13 @@ from contextlib import contextmanager
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from job_hunter.settings import ConfigurationError, Settings
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 class Database:
