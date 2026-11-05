@@ -151,8 +151,8 @@ is sent only in a host-only `job_hunter_session` cookie, scoped to `/api`, with 
 both an allowed `Origin` and `X-CSRF-Token`, including another login and `POST /api/auth/logout`.
 Login rotates the token and revokes the previous session; logout revokes it and clears the cookie.
 Do not put session tokens in browser storage. Missing, invalid, expired or revoked sessions return
-`401 unauthenticated`; invalid credentials use that same safe result. Email verification delivery
-remains a later issue. Last-seen updates never refresh authentication recency or expiry.
+`401 unauthenticated`; invalid credentials use that same safe result.
+Last-seen updates never refresh authentication recency or expiry.
 
 Protected routes depend on `job_hunter.api.sessions.authenticated_user`. Scope private queries by
 its `user_id`, never a submitted owner; return 404 for absent or foreign records. When a loaded
@@ -178,8 +178,40 @@ share an unknown-peer counter. The API uses only the ASGI client address, never 
 headers. Direct Uvicorn uses `--no-proxy-headers`; behind a proxy, enable proxy headers only with an
 explicit `--forwarded-allow-ips` list, and require that proxy to replace incoming forwarding headers.
 Never trust `*`. Limited requests return 429 with `Retry-After` seconds, also readable through CORS.
-Recovery, OAuth and verification adapters must call `limit_auth` with their matching action when added;
-this policy adds no placeholder routes or provider calls.
+Recovery and OAuth adapters must call `limit_auth` with their matching action when added.
+
+### Email verification and mail delivery
+
+With a configured database, API and worker startup also require these server-side variables:
+
+| Variable | Contract |
+| --- | --- |
+| `JOB_HUNTER_MAIL_PUBLIC_URL` | Canonical HTTPS origin without a path; HTTP allowed only for localhost/127.0.0.1 |
+| `JOB_HUNTER_MAIL_SENDER` | Sender email address |
+| `JOB_HUNTER_MAIL_KEY` | Secret Fernet key, identical across API/worker instances |
+| `JOB_HUNTER_MAIL_SMTP_HOST` | SMTP host supporting implicit TLS |
+| `JOB_HUNTER_MAIL_SMTP_PORT` | Optional port, default 465 |
+| `JOB_HUNTER_MAIL_SMTP_USERNAME`, `JOB_HUNTER_MAIL_SMTP_PASSWORD` | Optional credentials, supplied together |
+
+Generate a key once with `uv run --locked python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+from `backend/`, then store it securely outside the repository. Preserve it for pending deliveries and
+backups; rotate only after deliveries have drained or expired. Missing/invalid mail settings fail startup.
+
+Registration atomically saves the account, a SHA-256 token hash, an encrypted delivery record and
+referenced mail/expiry tasks. Duplicate registration sends no additional mail. Each link expires after
+one hour and uses the configured origin and `/verify-email#token=…`; fragments avoid access-log exposure.
+The verification UI arrives in #22. After login, submit the token in the JSON body of
+`POST /api/auth/verify`; `POST /api/auth/resend-verification` needs no body. Both require the session's
+Origin/CSRF protection and shared attempt limits. They return generic `202 {"status":"accepted"}`;
+read `/api/auth/me` for verified state. Invalid, expired, foreign and replayed tokens cannot verify an
+account. Resend replaces earlier links; verified accounts receive no further mail.
+
+The worker sends plain-text mail over certificate-verified SMTP TLS with five-second operation timeouts
+and at most three attempts. A stable Message-ID helps identify duplicates; delivery remains at least once.
+Successful publication deletes the encrypted secret. A separate durable expiry task deletes undelivered
+secrets even after mail failure; expiry cleanup requires a running worker. Failed tasks retain safe error
+codes for operational recovery. Mail content, credentials and tokens are never logged or returned by APIs.
+Tests use in-memory mail, fake clocks and real PostgreSQL; no provider credentials or external calls are required.
 
 ### Local PostgreSQL and migrations
 
@@ -279,8 +311,8 @@ Run the separate worker from `backend/` with the same `JOB_HUNTER_DATABASE_URL`:
 uv run --locked python -m job_hunter.worker --concurrency 2
 ```
 
-The explicit registry in `job_hunter.worker.HANDLERS` is initially empty. Feature issues register
-real handlers; unknown kinds stay pending. Concurrency is 1–16 per process (default 2).
+The worker registers verification-mail and expiry handlers at startup alongside the explicit
+`job_hunter.worker.HANDLERS` registry; unknown kinds stay pending. Concurrency is 1–16 per process (default 2).
 Claims use 60-second leases, renewed every 20 seconds while handlers run outside transactions.
 Each claim consumes an attempt; expired leases are recovered in batches of at most 100 registered tasks.
 `RetryableTaskError` schedules full-jitter exponential backoff (1-second base, 60-second cap);
@@ -296,7 +328,7 @@ acknowledges the stage in that same transaction; any publication failure rolls a
 Committed stages are not rerun, so the next task resumes from their preserved artifacts.
 Delivery is at least once: a crash after a provider response but before commit can repeat the call.
 Handlers must reserve/reconcile user and global budgets before paid calls and use provider
-idempotency where available, including any SDK retries. No provider handlers or paid calls exist yet.
+idempotency where available, including any SDK retries. SMTP is the only external adapter; no paid calls exist yet.
 Tests inject clock/sleep and jitter, plus deterministic handlers, against real PostgreSQL.
 
 The following are **planned command contracts, not working setup instructions**.

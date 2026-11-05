@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -10,12 +10,12 @@ from starlette.concurrency import run_in_threadpool
 
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
-from job_hunter.api.sessions import browser_guard, limit_auth
+from job_hunter.api.sessions import authenticated_user, browser_guard, limit_auth
 from job_hunter.api.sessions import router as sessions_router
-from job_hunter.application.accounts import RegisterAccount
+from job_hunter.application.accounts import RegisterAccount, VerifyEmail
 from job_hunter.application.auth_limits import AuthLimits
 from job_hunter.application.sessions import Sessions
-from job_hunter.domain.accounts import InvalidRegistration, Registration
+from job_hunter.domain.accounts import InvalidRegistration, Registration, SessionUser
 from job_hunter.infrastructure.accounts import (
     Argon2Passwords,
     PostgresAccounts,
@@ -42,6 +42,11 @@ class RegistrationRequest(BaseModel):
 
 class RegistrationResult(BaseModel):
     status: Literal["accepted"] = "accepted"
+
+
+class VerificationRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+    token: SecretStr = Field(min_length=43, max_length=43)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -94,11 +99,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.status_code = 200 if ready else 503
         return ReadinessResponse(status="ok" if ready else "unavailable")
 
+    accounts = PostgresAccounts(database) if database is not None else None
+    verification = (
+        VerifyEmail(accounts.verification, lambda: datetime.now(UTC))
+        if accounts is not None
+        else None
+    )
     registration = (
-        RegisterAccount(
-            PostgresAccounts(database), Argon2Passwords(), lambda: datetime.now(UTC)
-        )
-        if database is not None
+        RegisterAccount(accounts, Argon2Passwords(), lambda: datetime.now(UTC))
+        if accounts is not None
         else None
     )
 
@@ -121,6 +130,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if registration is None:
             raise HTTPException(503)
         registration.execute(values)
+        return RegistrationResult()
+
+    @app.post("/api/auth/verify", status_code=202)
+    def verify(
+        body: VerificationRequest,
+        request: Request,
+        user: Annotated[SessionUser, Depends(authenticated_user)],
+    ) -> RegistrationResult:
+        limit_auth(request, "verification", user.email)
+        assert verification is not None
+        verification.verify(user.user_id, body.token.get_secret_value())
+        return RegistrationResult()
+
+    @app.post("/api/auth/resend-verification", status_code=202)
+    def resend(
+        request: Request,
+        user: Annotated[SessionUser, Depends(authenticated_user)],
+    ) -> RegistrationResult:
+        limit_auth(request, "verification_resend", user.email)
+        assert verification is not None
+        verification.resend(user.user_id)
         return RegistrationResult()
 
     app.include_router(sessions_router)

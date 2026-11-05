@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from cryptography.fernet import Fernet
 from pydantic import SecretStr
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -39,6 +40,10 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "JOB_HUNTER_TRUSTED_HOSTS", '["testserver", "localhost", "127.0.0.1"]'
     )
+    monkeypatch.setenv("JOB_HUNTER_MAIL_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("JOB_HUNTER_MAIL_SENDER", "accounts@example.org")
+    monkeypatch.setenv("JOB_HUNTER_MAIL_PUBLIC_URL", "https://app.example.org")
+    monkeypatch.setenv("JOB_HUNTER_MAIL_SMTP_HOST", "smtp.example.org")
 
 
 @pytest.fixture

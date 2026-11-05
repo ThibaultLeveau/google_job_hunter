@@ -1,14 +1,19 @@
 import json
 import os
+import smtplib
 import socket
+import ssl
 import subprocess
 import sys
 import traceback
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
+from threading import Barrier, Event
 from typing import Annotated, cast
+from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -18,24 +23,40 @@ from alembic.script import ScriptDirectory
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
-from sqlalchemy import select, text, update
-from sqlalchemy.exc import DBAPIError, IntegrityError, InvalidRequestError
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import (
+    DBAPIError,
+    IntegrityError,
+    InvalidRequestError,
+    SQLAlchemyError,
+)
 from sqlalchemy.pool import QueuePool
+from test_worker import FakeClock, immediate
 
 from job_hunter.api.sessions import COOKIE, authenticated_user
 from job_hunter.app import create_app
+from job_hunter.application.accounts import Mail, RegisterAccount
 from job_hunter.application.sessions import LIFETIME, Sessions, csrf_token, token_hash
+from job_hunter.application.worker import RetryableTaskError, Worker
 from job_hunter.domain.accounts import Registration, SessionUser, Unauthenticated
 from job_hunter.domain.errors import DomainError
+from job_hunter.domain.tasks import StaleLease
 from job_hunter.infrastructure.accounts import (
     Argon2Passwords,
     AuthIdentityRecord,
+    MailDeliveryRecord,
     PostgresAccounts,
     PostgresSessions,
+    PostgresVerification,
     SessionRecord,
+    SmtpMail,
     UserRecord,
+    VerificationRecord,
+    load_mail_settings,
 )
 from job_hunter.infrastructure.database import Database
+from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord
+from job_hunter.infrastructure.worker import PostgresWorkerStore
 from job_hunter.settings import ConfigurationError, Settings, load_settings
 
 
@@ -70,6 +91,8 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
         "/api/health/live",
         "/api/health/ready",
         "/api/auth/register",
+        "/api/auth/verify",
+        "/api/auth/resend-verification",
         "/api/auth/login",
         "/api/auth/me",
         "/api/auth/logout",
@@ -626,3 +649,308 @@ def test_failed_rotation_preserves_previous_session(
             credential, token_hash(token), token_hash(token), NOW, NOW + LIFETIME
         )
     assert store.current(token_hash(token), NOW).user_id == owner
+
+
+class MemoryMail(Mail):
+    def __init__(self, database: Database, failures: int = 0) -> None:
+        self.database, self.failures = database, failures
+        self.messages: list[tuple[str, str, UUID]] = []
+        self.attempts = 0
+
+    def send(self, recipient: str, link: str, message_id: UUID) -> None:
+        assert isinstance(self.database.engine.pool, QueuePool)
+        assert self.database.engine.pool.checkedout() == 0
+        self.attempts += 1
+        if self.failures:
+            self.failures -= 1
+            raise RetryableTaskError(f"private-mail-canary {link}")
+        self.messages.append((recipient, link, message_id))
+
+
+def queued_verification(database: Database) -> tuple[PostgresVerification, UUID, str]:
+    accounts = PostgresAccounts(database)
+    RegisterAccount(accounts, Argon2Passwords(), lambda: NOW).execute(
+        Registration("User@example.org", PASSWORD)
+    )
+    with database.transaction() as session:
+        record = session.scalars(select(VerificationRecord)).one()
+        encrypted = session.scalars(select(MailDeliveryRecord.encrypted_token)).one()
+        token = accounts.verification.cipher.decrypt(encrypted).decode()
+        assert len(token) == 43 and record.token_hash == token_hash(token)
+        persisted = str(
+            session.execute(
+                text(
+                    "SELECT row_to_json(verification_deliveries) "
+                    "FROM verification_deliveries"
+                )
+            ).all()
+        ) + str(session.execute(text("SELECT row_to_json(tasks) FROM tasks")).all())
+        assert token not in persisted and "User@example.org" not in persisted
+        assert session.scalar(select(func.count()).select_from(TaskRecord)) == 2
+        return accounts.verification, record.user_id, token
+
+
+@pytest.mark.integration
+def test_verification_is_owner_scoped_single_use_and_concurrent(
+    isolated_database: Database,
+) -> None:
+    service, user_id, token = queued_verification(isolated_database)
+    assert not service.consume(uuid4(), token_hash(token), NOW)
+    database = Database(Settings(database_pool_size=2))
+    other = PostgresVerification(database, load_mail_settings())
+    barrier = Barrier(2)
+
+    def consume(index: int) -> bool:
+        barrier.wait(timeout=5)
+        return (service if index else other).consume(user_id, token_hash(token), NOW)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert sum(pool.map(consume, range(2))) == 1
+    finally:
+        database.close()
+    assert not service.consume(user_id, token_hash(token), NOW + timedelta(seconds=1))
+    service.resend(user_id, NOW)
+    service.resend(uuid4(), NOW)
+    with isolated_database.transaction() as session:
+        assert session.scalar(select(UserRecord.email_verified_at)) == NOW
+        assert session.scalar(select(func.count()).select_from(VerificationRecord)) == 0
+        assert session.scalar(select(func.count()).select_from(MailDeliveryRecord)) == 0
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("failures", [1, 3, "corrupt"])
+def test_mail_retry_and_expiry_delete_secrets_even_after_failure(
+    isolated_database: Database,
+    failures: int | str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, user_id, token = queued_verification(isolated_database)
+    mail = MemoryMail(isolated_database, failures if isinstance(failures, int) else 0)
+    clock = FakeClock()
+    if failures == "corrupt":
+        with isolated_database.transaction() as session:
+            session.execute(
+                update(MailDeliveryRecord).values(
+                    encrypted_token=b"private-ciphertext-canary"
+                )
+            )
+    handlers = service.handlers(mail, clock.now)
+    store = PostgresWorkerStore(isolated_database, handlers)
+    worker = Worker(
+        store,
+        {k: h.execute for k, h in handlers.items()},
+        clock,
+        immediate,
+        Event(),
+        lambda: 0.5,
+    )
+    for _ in range(4):
+        worker.tick()
+        worker.tick()
+        clock.sleep(2)
+    assert mail.attempts == {1: 2, 3: 3, "corrupt": 0}[failures]
+    with isolated_database.transaction() as session:
+        assert session.scalar(
+            select(TaskRecord.status).where(TaskRecord.kind == "verification_mail")
+        ) == ("succeeded" if failures == 1 else "failed")
+        assert session.scalar(select(func.count()).select_from(MailDeliveryRecord)) == (
+            0 if failures == 1 else 1
+        )
+    if mail.messages:
+        assert mail.messages[0][0] == "User@example.org"
+        assert (
+            mail.messages[0][1] == f"https://app.example.org/verify-email#token={token}"
+        )
+    clock.current = NOW + timedelta(hours=1)
+    assert not service.consume(user_id, token_hash(token), clock.now())
+    worker.tick()
+    worker.tick()
+    with isolated_database.transaction() as session:
+        assert session.scalar(select(func.count()).select_from(VerificationRecord)) == 0
+        assert session.scalar(select(func.count()).select_from(MailDeliveryRecord)) == 0
+        assert session.scalar(select(UserRecord.email_verified_at)) is None
+    assert token not in caplog.text and "private-mail-canary" not in caplog.text
+
+
+@pytest.mark.integration
+def test_mail_crash_recovery_fences_cleanup_and_reuses_link(
+    isolated_database: Database,
+) -> None:
+    service, user_id, token = queued_verification(isolated_database)
+    mail, clock = MemoryMail(isolated_database), FakeClock()
+    handlers = service.handlers(mail, clock.now)
+    store = PostgresWorkerStore(isolated_database, handlers)
+    task = store.claim(("verification_mail",), NOW, timedelta(seconds=1))
+    assert task is not None
+    with patch.object(
+        service.database,
+        "transaction",
+        side_effect=SQLAlchemyError("private-mail-canary"),
+    ):
+        with pytest.raises(RetryableTaskError):
+            handlers[task.key.kind].execute(task)
+    assert mail.attempts == 0
+    handlers[task.key.kind].execute(task)
+    clock.sleep(1)
+    store.recover(("verification_mail",), clock.now())
+    retried = store.claim(("verification_mail",), clock.now(), timedelta(seconds=1))
+    assert retried is not None
+    handlers[retried.key.kind].execute(retried)
+    assert mail.messages[0] == mail.messages[1]
+    with pytest.raises(StaleLease):
+        store.publish(task, None, clock.now())
+    with isolated_database.transaction() as session:
+        assert session.scalar(select(func.count()).select_from(MailDeliveryRecord)) == 1
+    store.publish(retried, None, clock.now())
+    handlers[retried.key.kind].execute(retried)
+    assert len(mail.messages) == 2
+    assert service.consume(user_id, token_hash(token), clock.now())
+
+
+@pytest.mark.integration
+def test_mail_enqueue_failure_rolls_back_account(
+    isolated_database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accounts = PostgresAccounts(isolated_database)
+
+    def unavailable(*args: object) -> None:
+        raise SQLAlchemyError("private-mail-canary")
+
+    monkeypatch.setattr(PostgresTaskQueue, "enqueue", unavailable)
+    with pytest.raises(RuntimeError, match="Account storage unavailable"):
+        RegisterAccount(accounts, Argon2Passwords(), lambda: NOW).execute(
+            Registration("user@example.org", PASSWORD)
+        )
+    with isolated_database.transaction() as session:
+        for table in (
+            UserRecord,
+            AuthIdentityRecord,
+            VerificationRecord,
+            MailDeliveryRecord,
+            TaskRecord,
+        ):
+            assert session.scalar(select(func.count()).select_from(table)) == 0
+
+
+@pytest.mark.integration
+def test_verify_resend_api_throttles_and_redacts(
+    isolated_database: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    origin = "https://testserver"
+    cipher = PostgresAccounts(isolated_database).verification.cipher
+
+    def current_token() -> str:
+        with isolated_database.transaction() as session:
+            return cipher.decrypt(
+                session.scalars(select(MailDeliveryRecord.encrypted_token)).one()
+            ).decode()
+
+    with TestClient(
+        create_app(Settings(allowed_origins=(origin,))), base_url=origin
+    ) as client:
+        assert client.post("/api/auth/resend-verification").status_code == 401
+        assert (
+            client.post("/api/auth/verify", json={"token": "x" * 43}).status_code == 401
+        )
+        values = {"email": "user@example.org", "password": PASSWORD}
+        assert client.post("/api/auth/register", json=values).status_code == 202
+        original = current_token()
+        client.post("/api/auth/register", json=values)
+        assert current_token() == original
+        login = client.post("/api/auth/login", json=values, headers={"Origin": origin})
+        headers = {"Origin": origin, "X-CSRF-Token": login.json()["csrf_token"]}
+        assert (
+            client.post("/api/auth/verify", json={"token": original}).status_code == 403
+        )
+        for _ in range(3):
+            assert client.post(
+                "/api/auth/resend-verification", headers=headers
+            ).json() == {"status": "accepted"}
+        limited = client.post("/api/auth/resend-verification", headers=headers)
+        assert limited.status_code == 429 and int(limited.headers["retry-after"]) > 3500
+        for token in (original, "x" * 43, "\ud800" * 43):
+            assert client.post(
+                "/api/auth/verify",
+                headers={**headers, "Content-Type": "application/json"},
+                content=json.dumps({"token": token}),
+            ).json() == {"status": "accepted"}
+        assert client.get("/api/auth/me").json()["email_verified"] is False
+        latest = current_token()
+        for _ in range(2):
+            verified = client.post(
+                "/api/auth/verify", headers=headers, json={"token": latest}
+            )
+            assert verified.status_code == 202 and verified.json() == {
+                "status": "accepted"
+            }
+            assert latest not in verified.text + caplog.text
+        assert client.get("/api/auth/me").json()["email_verified"] is True
+        invalid = client.post(
+            "/api/auth/verify",
+            headers=headers,
+            json={"token": "private-token-canary", "user_id": str(uuid4())},
+        )
+        assert invalid.status_code == 422 and "private-token-canary" not in invalid.text
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("KEY", "private-key-canary"),
+        ("KEY", None),
+        ("SENDER", "private-sender-canary\n"),
+        ("PUBLIC_URL", "http://private-host-canary.org"),
+        ("PUBLIC_URL", "https://app.example.org/path"),
+        ("SMTP_USERNAME", "private-user-canary"),
+        ("SMTP_PORT", "99999"),
+    ],
+)
+def test_invalid_mail_configuration_is_safe(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str | None
+) -> None:
+    if value is None:
+        monkeypatch.delenv(f"JOB_HUNTER_MAIL_{name}")
+    else:
+        monkeypatch.setenv(f"JOB_HUNTER_MAIL_{name}", value)
+    with pytest.raises(ConfigurationError) as raised:
+        load_mail_settings()
+    assert "canary" not in "".join(traceback.format_exception(raised.value))
+
+
+def test_smtp_uses_tls_canonical_sender_and_safe_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = MagicMock()
+    monkeypatch.setattr(smtplib, "SMTP_SSL", transport)
+    SmtpMail(load_mail_settings()).send(
+        "user@example.org", "https://app.example.org", uuid4()
+    )
+    transport.return_value.__enter__.return_value.login.assert_not_called()
+    transport.reset_mock()
+    monkeypatch.setenv("JOB_HUNTER_MAIL_SMTP_USERNAME", "smtp-user")
+    monkeypatch.setenv("JOB_HUNTER_MAIL_SMTP_PASSWORD", "private-smtp-canary")
+    mail = SmtpMail(load_mail_settings())
+    message_id, link = (
+        uuid4(),
+        "https://app.example.org/verify-email#token=private-token-canary",
+    )
+    mail.send("user@example.org", link, message_id)
+    connection = transport.return_value.__enter__.return_value
+    context = transport.call_args.kwargs["context"]
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+    assert transport.call_args.kwargs["timeout"] == 5
+    connection.login.assert_called_once_with("smtp-user", "private-smtp-canary")
+    message = connection.send_message.call_args.args[0]
+    assert (
+        message["From"] == "accounts@example.org"
+        and message["To"] == "user@example.org"
+    )
+    assert message["Message-ID"] == f"<{message_id}@app.example.org>"
+    assert link in message.get_content() and message.get_content_type() == "text/plain"
+    connection.send_message.side_effect = smtplib.SMTPException("private-token-canary")
+    with pytest.raises(RetryableTaskError) as raised:
+        mail.send("user@example.org", link, message_id)
+    assert "private-token-canary" not in "".join(
+        traceback.format_exception(raised.value)
+    )
