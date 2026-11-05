@@ -9,6 +9,7 @@ __pycache__/
 .coverage.*
 htmlcov/
 coverage.xml
+/backend/reports/
 dist/
 build/
 .env

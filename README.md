@@ -5,7 +5,8 @@ run grouped Google searches, and inspect public job evidence and private profile
 
 **Current state:** the backend bootstrap provides a typed FastAPI app factory and a credential-free
 liveness endpoint. Architecture and contribution contracts are established.
-Frontend, worker, database setup and GitHub Actions workflows remain planned.
+Backend GitHub Actions checks enforce formatting, lint, strict types and coverage.
+Frontend, worker and database setup remain planned.
 
 - Read [the architecture](docs/architecture.md) for product scope, ownership, recovery and operator settings.
 - Read [the contribution rules](AGENTS.md) before implementation.
@@ -45,15 +46,28 @@ It requires no database, provider account or credentials.
 Run the implemented backend checks from `backend/`:
 
 ```bash
-uv run --locked pytest
 uv run --locked ruff format --check .
 uv run --locked ruff check .
-uv run --locked mypy --strict src
 uv run --locked mypy
+uv run --locked pytest --cov --cov-report=term-missing \
+  --cov-report=json:reports/coverage.json --cov-report=xml:reports/coverage.xml \
+  --junitxml=reports/junit.xml
+uv run --locked python scripts/check_coverage.py reports/coverage.json
 ```
 
-The final command also checks tests. Tests inject local settings and exercise actual server
-startup failure with a synthetic credential canary to verify redacted output.
+Mypy runs in strict mode for source, quality scripts and tests. Tests inject local settings and
+exercise actual server startup failure with a synthetic credential canary to verify redacted output.
+The coverage gate independently requires 90% lines and 85% branches without rounding up.
+It measures all backend application source and the coverage script, with no source or branch
+exclusions. Test code is not part of the coverage denominator. A measured branch-free codebase
+counts as 100% branch coverage; missing branch instrumentation or empty line coverage fails.
+
+The `Backend quality` check runs these commands on every pull request and push to `main`.
+It uses pinned actions and uv 0.13.7, read-only repository access, a ten-minute timeout and
+cancels superseded runs. The uv cache includes the runner platform, Python and lockfile identity;
+only pushes to `main` save it. Failures upload available JUnit and coverage reports for seven days.
+Tests still run after lint failure when installation succeeds, so failure reports remain useful.
+Validate workflow syntax locally with `actionlint .github/workflows/backend.yml` from the root.
 
 Settings are read for each app creation and validated before serving requests:
 
@@ -84,7 +98,6 @@ Supported Python/Node minors and dependency versions are deliberately resolved a
 
 | Available after | Working directory | Planned commands or contract |
 | --- | --- | --- |
-| [#3](https://github.com/ThibaultLeveau/google_job_hunter/issues/3) | `backend/` | CI runs the locked backend checks and adds coverage gates of 90% lines / 85% branches |
 | [#4](https://github.com/ThibaultLeveau/google_job_hunter/issues/4) | `frontend/` | `npm ci`; `npm run dev`; `npm run typecheck`; `npm run lint`; `npm run build` |
 | [#5](https://github.com/ThibaultLeveau/google_job_hunter/issues/5) | `frontend/` | Adds the exact Vitest coverage script and CI with 90% lines / 85% branches; no test script exists yet |
 | [#7](https://github.com/ThibaultLeveau/google_job_hunter/issues/7) | Root / `backend/` | Supplies Compose service/schema commands; introduces Alembic and real PostgreSQL/pgvector |
