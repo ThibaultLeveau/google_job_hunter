@@ -84,6 +84,7 @@ From `frontend/`, install the lockfile and start the local UI:
 
 ```bash
 npm ci
+uv sync --directory ../backend --locked
 npm run dev
 ```
 
@@ -109,12 +110,38 @@ and fail teardown even when application code catches the request error. No API k
 Frontend coverage includes every `src/**/*.ts` and `src/**/*.tsx` module, including unimported files,
 with independent 90% line and 85% branch floors. The only application exclusion is `src/main.tsx`,
 which solely mounts React into the document and must not contain business logic. Tests and shared
-test setup are outside the maintained application denominator; generated API types do not exist yet.
+test setup are outside the maintained application denominator. Generated declarations under
+`frontend/generated/` contain no business logic and are outside maintained source/lint coverage.
 Vitest writes JUnit and coverage reports under ignored `frontend/reports/`, including on test failure.
 Both workflows retain available failure artifacts for seven days, use read-only repository access,
 verified action pins, bounded timeouts and cancel superseded runs. The npm cache contains package
 downloads keyed by platform and lockfile; it does not cache `node_modules` or build output.
 Validate both workflows with `actionlint .github/workflows/*.yml` from the repository root.
+
+`npm run generate:api` exports the actual FastAPI routes with application settings removed from the
+child environment, no database configured and offline uv execution. It writes deterministic ignored
+`generated/openapi.json` and `generated/api.d.ts`; external schema references are rejected.
+Dev, lint, typecheck, tests and build regenerate before using the contract. Frontend CI installs
+locked backend dependencies first; it needs no database, provider credentials or live API server.
+The generator is pinned to openapi-typescript 6.7.6, which supports the project's TypeScript 6 without
+a conflicting compiler peer dependency. Its Undici dependency is pinned to patched 6.29.1; generation
+uses an in-memory schema and forbids network fetching. Do not edit or commit generated declarations.
+
+`frontend/src/shared/api.ts` exports the application's `api` instance, installed through React Query's
+provider, and `createApiClient` for isolated tests. Use `useQuery(api.currentSession)` with the stable
+`sessionKey`; a 401 becomes an anonymous session, while service failures remain errors. Use generated
+`paths`/`components` types for request payloads and response types passed to `api.request<T>`.
+JSON requests stay within same-origin `/api/`, include credentials, refuse redirects and bypass HTTP
+caching. Writes use the current in-memory CSRF token. `ApiError` distinguishes authentication,
+validation, retryable HTTP, other HTTP, network and invalid-response failures; validated error details
+retain field errors and request IDs. AbortSignal cancellation stays an abort instead of a network error.
+Read queries retry at most twice with backoff; Retry-After is respected up to 30 seconds, with longer
+waits requiring an explicit retry. Mutation retries are disabled. Call `api.acceptSession` after a
+successful identity change and `api.invalidateSession` after a change such as email verification.
+Logout and `clearSession` cancel pending requests, clear private caches and publish a null session
+to mounted consumers. Identity replacement updates those consumers immediately. Session refresh
+also discards private data when the identity or CSRF token changes. Logout failures still clear local
+data and propagate the error; they do not prove the server session was revoked. No cache is persisted.
 
 Shared interface primitives live in `frontend/src/shared/ui.tsx`; color, spacing, type, radius and
 focus tokens live in `frontend/src/styles.css`. Use `Button` with `primary`, `secondary` or `danger`
@@ -416,13 +443,9 @@ Handlers must reserve/reconcile user and global budgets before paid calls and us
 idempotency where available, including any SDK retries. SMTP is the only external adapter; no paid calls exist yet.
 Tests inject clock/sleep and jitter, plus deterministic handlers, against real PostgreSQL.
 
-The following are **planned command contracts, not working setup instructions**.
-They were checked against the linked foundation issues; those PRs must implement and verify them.
-Supported Python/Node minors and dependency versions are deliberately resolved and pinned in their bootstraps.
-
-| Available after | Working directory | Planned commands or contract |
+| Available since | Working directory | Command contract |
 | --- | --- | --- |
-| [#20](https://github.com/ThibaultLeveau/google_job_hunter/issues/20) | Backend / frontend | Supplies deterministic OpenAPI export and ignored type generation before frontend checks/build/tests |
+| [#20](https://github.com/ThibaultLeveau/google_job_hunter/issues/20) | `frontend/` | `npm run generate:api` exports deterministic OpenAPI and generates ignored declarations before checks/build/tests |
 
 Normal CI uses deterministic provider fixtures and requires no Google, mail, SerpApi, LLM or embedding secret.
 Real PostgreSQL is required when database behavior is tested; browser journeys later use the real API/worker.
