@@ -1,0 +1,77 @@
+:root {
+  font-family: system-ui, sans-serif;
+  font-size: 100%;
+  line-height: 1.6;
+  color: #222c2a;
+  background: #f7f5f0;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 0;
+}
+
+main {
+  width: min(100% - 2.5rem, 48rem);
+  margin: clamp(3rem, 10vh, 8rem) auto;
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+p {
+  margin-block: 0 1rem;
+}
+
+h1 {
+  font-size: clamp(2.5rem, 7vw, 4rem);
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+}
+
+h2 {
+  font-size: 1.25rem;
+  line-height: 1.4;
+}
+
+.eyebrow {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: #366052;
+}
+
+.introduction {
+  font-size: 1.25rem;
+}
+
+section {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #7a857d;
+}
+
+.skip-link {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  max-width: calc(100% - 1.5rem);
+  padding: 0.5rem 0.75rem;
+  color: #fff;
+  background: #244f42;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+:focus-visible {
+  outline: 3px solid #244f42;
+  outline-offset: 4px;
+}
