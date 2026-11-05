@@ -1,11 +1,20 @@
 import hmac
 import math
 import secrets
+import smtplib
+import ssl
+from collections.abc import Callable
 from datetime import datetime, timedelta
+from email.message import EmailMessage
+from typing import Self, cast
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import HashingError, InvalidHashError, VerificationError
+from cryptography.fernet import Fernet, InvalidToken
+from pydantic import Field, SecretStr, ValidationError, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict, SettingsError
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
@@ -22,21 +31,31 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from job_hunter.application.accounts import AccountWriter, Passwords
+from job_hunter.application.accounts import (
+    AccountWriter,
+    Mail,
+    Passwords,
+    VerificationStore,
+)
 from job_hunter.application.auth_limits import AuthCounter
-from job_hunter.application.sessions import Credential, SessionStore
+from job_hunter.application.sessions import Credential, SessionStore, token_hash
+from job_hunter.application.worker import PermanentTaskError, RetryableTaskError
 from job_hunter.domain.accounts import (
     InvalidRegistration,
     RateBucket,
     Registration,
     SessionUser,
     Unauthenticated,
+    normalize_email,
     validate_password,
 )
-from job_hunter.domain.tasks import require_utc
+from job_hunter.domain.tasks import NewTask, Task, TaskKey, require_utc
 from job_hunter.infrastructure.database import Base, Database
+from job_hunter.infrastructure.tasks import PostgresTaskQueue
+from job_hunter.infrastructure.worker import Handler
+from job_hunter.settings import ConfigurationError, Settings
 
 
 class UserRecord(Base):
@@ -110,6 +129,7 @@ class Argon2Passwords(Passwords):
 class PostgresAccounts(AccountWriter):
     def __init__(self, database: Database) -> None:
         self.database = database
+        self.verification = PostgresVerification(database, load_mail_settings())
 
     def create(
         self, registration: Registration, password_hash: str, now: datetime
@@ -139,6 +159,7 @@ class PostgresAccounts(AccountWriter):
                             created_at=now,
                         )
                     )
+                    self.verification.enqueue(session, user_id, now)
         except SQLAlchemyError:
             raise RuntimeError("Account storage unavailable.") from None
 
@@ -344,3 +365,222 @@ class PostgresAuthCounter(AuthCounter):
                     ).one()
                     return max(1, math.ceil((expires - now).total_seconds()))
             return 0
+
+
+class MailSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="JOB_HUNTER_MAIL_", frozen=True, hide_input_in_errors=True
+    )
+    sender: str
+    public_url: str
+    key: SecretStr
+    smtp_host: str = Field(min_length=1, max_length=253)
+    smtp_port: int = Field(default=465, ge=1, le=65535)
+    smtp_username: SecretStr | None = None
+    smtp_password: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def validate_mail(self) -> Self:
+        normalize_email(self.sender)
+        Settings.validate_origins((self.public_url,))
+        origin = urlsplit(self.public_url)
+        if origin.scheme != "https" and origin.hostname not in {
+            "localhost",
+            "127.0.0.1",
+        }:
+            raise ValueError(
+                "Public mail links require HTTPS outside local development."
+            )
+        Fernet(self.key.get_secret_value())
+        if (self.smtp_username is None) != (self.smtp_password is None):
+            raise ValueError("SMTP credentials must be configured together.")
+        return self
+
+
+def load_mail_settings() -> MailSettings:
+    try:
+        # BaseSettings supplies required constructor fields from the environment.
+        return cast(Callable[[], MailSettings], MailSettings)()
+    except ValidationError, SettingsError, InvalidRegistration:
+        raise ConfigurationError("Invalid JOB_HUNTER_MAIL_ configuration.") from None
+
+
+class SmtpMail(Mail):
+    def __init__(self, settings: MailSettings) -> None:
+        self.settings = settings
+
+    def send(self, recipient: str, link: str, message_id: UUID) -> None:
+        message = EmailMessage()
+        message["From"], message["To"] = self.settings.sender, recipient
+        message["Subject"] = "Verify your email"
+        message["Message-ID"] = (
+            f"<{message_id}@{urlsplit(self.settings.public_url).hostname}>"
+        )
+        message.set_content(
+            f"Verify your email:\n{link}\n\nThis link expires after one hour.\n"
+        )
+        try:
+            with smtplib.SMTP_SSL(
+                self.settings.smtp_host,
+                self.settings.smtp_port,
+                timeout=5,
+                context=ssl.create_default_context(),
+            ) as smtp:
+                if self.settings.smtp_username is not None:
+                    assert self.settings.smtp_password is not None
+                    smtp.login(
+                        self.settings.smtp_username.get_secret_value(),
+                        self.settings.smtp_password.get_secret_value(),
+                    )
+                smtp.send_message(message)
+        except OSError:
+            raise RetryableTaskError() from None
+
+
+class VerificationRecord(Base):
+    __tablename__ = "email_verifications"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_verification_user"),
+        UniqueConstraint("token_hash", name="uq_verification_token"),
+        CheckConstraint("token_hash ~ '^[0-9a-f]{64}$'", name="ck_verification_token"),
+        CheckConstraint("expires_at > created_at", name="ck_verification_expiry"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    token_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MailDeliveryRecord(Base):
+    __tablename__ = "verification_deliveries"
+    id: Mapped[UUID] = mapped_column(
+        ForeignKey("email_verifications.id", ondelete="CASCADE"), primary_key=True
+    )
+    encrypted_token: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class PostgresVerification(VerificationStore):
+    def __init__(self, database: Database, settings: MailSettings) -> None:
+        self.database, self.settings = database, settings
+        self.cipher = Fernet(settings.key.get_secret_value())
+
+    def enqueue(self, session: Session, user_id: UUID, now: datetime) -> None:
+        # The caller holds the user lock; replacement invalidates previous links.
+        session.execute(
+            delete(VerificationRecord).where(VerificationRecord.user_id == user_id)
+        )
+        token, record_id = secrets.token_urlsafe(32), uuid4()
+        expires = now + timedelta(hours=1)
+        session.add(
+            VerificationRecord(
+                id=record_id,
+                user_id=user_id,
+                token_hash=token_hash(token),
+                created_at=now,
+                expires_at=expires,
+            )
+        )
+        session.flush()
+        session.add(
+            MailDeliveryRecord(
+                id=record_id,
+                encrypted_token=self.cipher.encrypt_at_time(
+                    token.encode(), int(now.timestamp())
+                ),
+            )
+        )
+        queue = PostgresTaskQueue(session)
+        for kind, run_at in (
+            ("verification_mail", now),
+            ("verification_expiry", expires),
+        ):
+            queue.enqueue(NewTask(TaskKey(kind, record_id, 1), record_id, run_at), now)
+
+    def resend(self, user_id: UUID, now: datetime) -> None:
+        require_utc(now)
+        with self.database.transaction() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.id == user_id).with_for_update()
+            )
+            if user is not None and user.email_verified_at is None:
+                self.enqueue(session, user_id, now)
+
+    def consume(self, user_id: UUID, digest: str, now: datetime) -> bool:
+        require_utc(now)
+        with self.database.transaction() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.id == user_id).with_for_update()
+            )
+            consumed = session.scalar(
+                delete(VerificationRecord)
+                .where(
+                    VerificationRecord.user_id == user_id,
+                    VerificationRecord.token_hash == digest,
+                    VerificationRecord.expires_at > now,
+                )
+                .returning(VerificationRecord.id)
+            )
+            if user is not None and consumed is not None:
+                user.email_verified_at = user.email_verified_at or now
+                return True
+            return False
+
+    def deliver(self, task: Task, mail: Mail, now: datetime) -> None:
+        try:
+            with self.database.transaction() as session:
+                row = session.execute(
+                    select(UserRecord.email, MailDeliveryRecord.encrypted_token)
+                    .join(
+                        VerificationRecord, VerificationRecord.user_id == UserRecord.id
+                    )
+                    .join(
+                        MailDeliveryRecord,
+                        MailDeliveryRecord.id == VerificationRecord.id,
+                    )
+                    .where(
+                        MailDeliveryRecord.id == task.payload_ref,
+                        VerificationRecord.expires_at > now,
+                        UserRecord.email_verified_at.is_(None),
+                    )
+                ).one_or_none()
+        except SQLAlchemyError:
+            raise RetryableTaskError() from None
+        if row is None:
+            return
+        try:
+            token = self.cipher.decrypt_at_time(
+                row[1], 3600, int(now.timestamp())
+            ).decode()
+        except InvalidToken:
+            raise PermanentTaskError() from None
+        mail.send(
+            row[0],
+            f"{self.settings.public_url}/verify-email#token={token}",
+            task.payload_ref,
+        )
+
+    def published(
+        self, session: Session, task: Task, result: object, now: datetime
+    ) -> None:
+        session.execute(
+            delete(MailDeliveryRecord).where(MailDeliveryRecord.id == task.payload_ref)
+        )
+
+    def expired(
+        self, session: Session, task: Task, result: object, now: datetime
+    ) -> None:
+        session.execute(
+            delete(VerificationRecord).where(
+                VerificationRecord.id == task.payload_ref,
+                VerificationRecord.expires_at <= now,
+            )
+        )
+
+    def handlers(self, mail: Mail, now: Callable[[], datetime]) -> dict[str, Handler]:
+        return {
+            "verification_mail": Handler(
+                lambda task: self.deliver(task, mail, now()), self.published
+            ),
+            "verification_expiry": Handler(lambda task: None, self.expired),
+        }

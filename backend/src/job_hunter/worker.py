@@ -8,6 +8,11 @@ from datetime import UTC, datetime
 from threading import Event
 
 from job_hunter.application.worker import Worker
+from job_hunter.infrastructure.accounts import (
+    PostgresVerification,
+    SmtpMail,
+    load_mail_settings,
+)
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.worker import Handler, PostgresWorkerStore
 from job_hunter.settings import load_settings
@@ -34,12 +39,19 @@ def main() -> None:
         signal.signal(signum, lambda _signal, _frame: stop.set())
     database = Database(load_settings())
     try:
+        clock = SystemClock()
+        mail_settings = load_mail_settings()
+        verification = PostgresVerification(database, mail_settings)
+        handlers = {
+            **HANDLERS,
+            **verification.handlers(SmtpMail(mail_settings), clock.now),
+        }
         with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
             logging.getLogger(__name__).info("Worker started.")
             Worker(
-                PostgresWorkerStore(database, HANDLERS),
-                {kind: handler.execute for kind, handler in HANDLERS.items()},
-                SystemClock(),
+                PostgresWorkerStore(database, handlers),
+                {kind: handler.execute for kind, handler in handlers.items()},
+                clock,
                 executor.submit,
                 stop,
                 random.random,
