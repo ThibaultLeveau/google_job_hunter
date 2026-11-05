@@ -59,7 +59,7 @@ uv run --locked python scripts/check_coverage.py reports/coverage.json
 Mypy runs in strict mode for source, quality scripts and tests. Tests inject local settings and
 exercise actual server startup failure with a synthetic credential canary to verify redacted output.
 The coverage gate independently requires 90% lines and 85% branches without rounding up.
-It measures all backend application source and the coverage script, with no source or branch
+It measures all backend application source and quality scripts, with no source or branch
 exclusions. Test code is not part of the coverage denominator. A measured branch-free codebase
 counts as 100% branch coverage; missing branch instrumentation or empty line coverage fails.
 
@@ -118,18 +118,6 @@ Invalid values abort startup with field names only, without submitted values or 
 Tests may pass immutable `Settings` explicitly to `create_app` to avoid ambient configuration.
 No provider credentials or business settings are introduced by this bootstrap.
 
-From the repository root on an issue branch, also check the diff:
-
-```bash
-git diff --check main
-git diff --stat main...HEAD
-git diff --numstat main...HEAD
-```
-
-The first command includes tracked uncommitted edits; the latter two measure committed branch changes.
-After fetching current `main`, use its merge base to measure a PR. Include new untracked files before review.
-Report raw and adjusted totals as described in [AGENTS.md](AGENTS.md).
-
 The following are **planned command contracts, not working setup instructions**.
 They were checked against the linked foundation issues; those PRs must implement and verify them.
 Supported Python/Node minors and dependency versions are deliberately resolved and pinned in their bootstraps.
@@ -146,6 +134,41 @@ Real PostgreSQL is required when database behavior is tested; browser journeys l
 Live-provider credentials, public URL, retention and budgets are operator settings detailed in
 [the architecture](docs/architecture.md#operator-settings-and-fixture-contract).
 The backend bootstrap makes no paid calls and performs no deployment.
+
+## Contribution workflow
+
+Start from fetched current `main` after the selected issue's explicit prerequisites merge.
+Use its prescribed branch name, one issue per branch and one focused PR with `Closes #N`.
+Use [the PR template](.github/pull_request_template.md) to describe concrete behavior, scope,
+validation commands/results, limitations and measured size. Implement only that issue.
+Write focused English commits; multiple coherent commits are welcome. Clean up fixup/WIP commits
+before review without rewriting shared `main` or unrelated work. Do not change repository settings.
+Follow [AGENTS.md](AGENTS.md#git-and-pr-delivery): record the complete-diff review, fix findings,
+repeat affected checks and squash-merge the reviewed head only after applicable checks pass.
+
+From the repository root on an issue branch, inspect and measure committed changes:
+
+```bash
+git fetch origin main
+git diff --check origin/main
+uv run --no-project --python 3.14 python backend/scripts/check_pr_size.py origin/main HEAD
+```
+
+The whitespace check includes tracked uncommitted edits. The size script measures the merge-base
+diff of committed history; add and commit all intended files before the final measurement.
+The stable `PR size` check runs the same script on `pull_request` with read-only access, no secrets,
+full history and no shell interpolation of PR titles or filenames. It reports each failed cap and
+exits nonzero above 10 changed files or 1,000 authored added + deleted lines. Split excess into a
+focused issue before implementation; do not silently raise caps. Smaller issue targets still apply.
+
+Renames count once, deletions count, and tests/config/docs/generated application source count fully.
+Only exact dependency locks `backend/uv.lock` and `frontend/package-lock.json` have their lines
+reported separately; both still count as files. Renaming authored source into a lock path does not
+exempt it. Raw and adjusted additions/deletions/totals appear in the output and must go in the PR.
+The script requests Git text counts; if attributes still produce uncountable binary records, it
+fails with a measurement error instead of exempting those files. This is a line/file cap, not a byte cap.
+Filenames are NUL-delimited during parsing and JSON-escaped for logs; external diff/textconv helpers
+are disabled. The check installs no project dependencies and uses no write token or privileged trigger.
 
 ## Bootstrap file budgets
 
