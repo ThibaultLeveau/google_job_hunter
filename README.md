@@ -3,9 +3,9 @@
 Google Job Hunter is a planned private job-research application: review profile facts from documents,
 run grouped Google searches, and inspect public job evidence and private profile matches.
 
-**Current state:** issue #1 establishes architecture and contribution contracts only.
-There is no runnable backend, frontend, worker, database setup or GitHub Actions workflow yet.
-This PR adds exactly `AGENTS.md`, `docs/architecture.md` and `README.md`; application work follows separately.
+**Current state:** the backend bootstrap provides a typed FastAPI app factory and a credential-free
+liveness endpoint. Architecture and contribution contracts are established.
+Frontend, worker, database setup and GitHub Actions workflows remain planned.
 
 - Read [the architecture](docs/architecture.md) for product scope, ownership, recovery and operator settings.
 - Read [the contribution rules](AGENTS.md) before implementation.
@@ -29,7 +29,44 @@ Scanned PDFs, JavaScript-only pages and absent fields receive explicit unsupport
 
 ## Development status and command contracts
 
-Only documentation/Git checks apply today. From the repository root on an issue branch:
+Use Python 3.14 and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+The Python minor is constrained in `backend/pyproject.toml`; `backend/uv.lock` locks dependencies.
+From `backend/`, install and start the API locally:
+
+```bash
+uv sync --locked
+uv run --locked uvicorn job_hunter.app:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+`GET http://127.0.0.1:8000/api/health/live` returns `200` with `{"status":"ok"}`.
+Liveness does not contact external services or report configuration values.
+It requires no database, provider account or credentials.
+
+Run the implemented backend checks from `backend/`:
+
+```bash
+uv run --locked pytest
+uv run --locked ruff format --check .
+uv run --locked ruff check .
+uv run --locked mypy --strict src
+uv run --locked mypy
+```
+
+The final command also checks tests. Tests inject local settings and exercise actual server
+startup failure with a synthetic credential canary to verify redacted output.
+
+Settings are read for each app creation and validated before serving requests:
+
+| Environment variable | Default | Behavior |
+| --- | --- | --- |
+| `JOB_HUNTER_DOCS_ENABLED` | `false` | Boolean; `true` enables `/docs` and `/openapi.json` |
+
+Set variables in the process environment; the application does not load `.env` files automatically.
+Invalid values abort startup with field names only, without submitted values or chained validation errors.
+Tests may pass immutable `Settings` explicitly to `create_app` to avoid ambient configuration.
+No provider credentials or business settings are introduced by this bootstrap.
+
+From the repository root on an issue branch, also check the diff:
 
 ```bash
 git diff --check main
@@ -47,8 +84,6 @@ Supported Python/Node minors and dependency versions are deliberately resolved a
 
 | Available after | Working directory | Planned commands or contract |
 | --- | --- | --- |
-| [#2](https://github.com/ThibaultLeveau/google_job_hunter/issues/2) | `backend/` | `uv sync --locked`; `uv run pytest`; `uv run ruff format --check .`; `uv run ruff check .`; `uv run mypy --strict src` |
-| [#2](https://github.com/ThibaultLeveau/google_job_hunter/issues/2) | `backend/` | The app-factory PR supplies the exact `uv` serve command and tests `GET /api/health/live` without credentials |
 | [#3](https://github.com/ThibaultLeveau/google_job_hunter/issues/3) | `backend/` | CI runs the locked backend checks and adds coverage gates of 90% lines / 85% branches |
 | [#4](https://github.com/ThibaultLeveau/google_job_hunter/issues/4) | `frontend/` | `npm ci`; `npm run dev`; `npm run typecheck`; `npm run lint`; `npm run build` |
 | [#5](https://github.com/ThibaultLeveau/google_job_hunter/issues/5) | `frontend/` | Adds the exact Vitest coverage script and CI with 90% lines / 85% branches; no test script exists yet |
@@ -61,14 +96,15 @@ Normal CI uses deterministic provider fixtures and requires no Google, mail, Ser
 Real PostgreSQL is required when database behavior is tested; browser journeys later use the real API/worker.
 Live-provider credentials, public URL, retention and budgets are operator settings detailed in
 [the architecture](docs/architecture.md#operator-settings-and-fixture-contract).
-Issue #1 makes no paid calls and performs no deployment.
+The backend bootstrap makes no paid calls and performs no deployment.
 
 ## Bootstrap file budgets
 
-Each bootstrap is its own PR after its prerequisites merge. These are planning inventories, not created files.
+Each bootstrap is its own PR after its prerequisites merge. The backend inventory is implemented;
+the frontend inventory remains a plan.
 Reserve space for tests/configuration within the ten-file limit; add feature layers only when used.
 
-| Backend issue #2 proposed file | Purpose |
+| Backend issue #2 file | Purpose |
 | --- | --- |
 | `backend/pyproject.toml` | Supported Python minor, package metadata and quality configuration |
 | `backend/uv.lock` | Locked dependencies; generated lines reported separately |
@@ -77,8 +113,10 @@ Reserve space for tests/configuration within the ten-file limit; add feature lay
 | `backend/src/job_hunter/settings.py` | Validated, redacted settings |
 | `backend/tests/test_health.py` | Health, deterministic startup and invalid-settings behavior |
 | `.gitignore` | Shared exclusions, if absent |
+| `README.md` | Verified local commands and configuration contract |
+| `AGENTS.md` | Review-and-merge delivery policy |
 
-This leaves three of ten file slots available for justified bootstrap needs.
+This uses nine of ten file slots, including the lockfile and documentation.
 Database, worker and feature modules belong to their later issues.
 
 | Frontend issue #4 file | Purpose |

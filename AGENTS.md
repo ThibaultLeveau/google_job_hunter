@@ -84,8 +84,15 @@ Do not claim planned checks have run or that unimplemented commands work.
 One issue = one branch = one focused PR. Use the branch name specified in the issue.
 Use focused, meaningful English commits; multiple coherent commits are welcome.
 Clean up fixup/WIP commits before review without rewriting shared `main` or unrelated work.
-Squash merge is the recommended linear-main policy; do not change repository settings.
-Open a PR containing `Closes #N` for the selected issue. Do not merge it.
+Open a PR containing `Closes #N` for the selected issue.
+Review the complete diff against the issue acceptance criteria and these rules; record the outcome.
+Fix review findings and repeat the affected checks and review until no blocking findings remain.
+An agent's documented self-review satisfies this review step unless repository protections require
+another approver; never represent self-review as an independent GitHub approval.
+After review and required checks pass, mark the PR ready and squash-merge the reviewed head.
+Then fetch current `main` and proceed to the next issue after its explicit prerequisites have merged.
+This review-and-merge policy supersedes older issue instructions to leave PRs unmerged.
+Do not change repository settings or bypass branch protections.
 
 Keep at most 10 total changed files and about 1,000 added + deleted authored lines per PR.
 The selected issue's smaller target also matters; issue #1 targets 400–650 lines across three files.
@@ -98,7 +105,9 @@ do not silently relax the cap or start another issue without authorization.
 
 The PR must describe the concrete behavior, scope, validation commands/results, limitations and size.
 Update only relevant documentation. Required GitHub checks must pass.
-If checks are unavailable or blocked, report the exact blocker and leave the PR draft.
+If existing required checks are unavailable, failing or blocked, report the exact blocker and leave
+the PR draft. Before the relevant CI workflow is introduced by its roadmap issue, passing applicable
+local checks and the documented review permit merging; explicitly report that CI does not exist yet.
 Never describe absent workflows as green checks.
 
 ## Initial bootstrap exception
