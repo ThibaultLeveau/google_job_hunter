@@ -5,8 +5,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from job_hunter.application.auth_limits import AuthLimits
 from job_hunter.application.sessions import LIFETIME, Sessions, csrf_token
-from job_hunter.domain.accounts import SessionUser, Unauthenticated
+from job_hunter.domain.accounts import (
+    AuthAction,
+    AuthLimitExceeded,
+    SessionUser,
+    Unauthenticated,
+)
 
 COOKIE = "job_hunter_session"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -68,6 +74,27 @@ def browser_guard(request: Request) -> None:
         authenticated_user(request)
 
 
+def verified_user(request: Request) -> SessionUser:
+    user = authenticated_user(request)
+    if not user.email_verified:
+        raise HTTPException(403)
+    return user
+
+
+def limit_auth(request: Request, action: AuthAction, email: str | None = None) -> None:
+    limiter = cast(AuthLimits | None, request.app.state.auth_limits)
+    if limiter is None:
+        raise HTTPException(503)
+    try:
+        limiter.check(
+            action, request.client.host if request.client else "unknown", email
+        )
+    except AuthLimitExceeded as error:
+        raise HTTPException(
+            429, headers={"Retry-After": str(error.retry_after)}
+        ) from None
+
+
 def response_user(user: SessionUser, token: str) -> CurrentUser:
     return CurrentUser(
         id=user.user_id,
@@ -94,6 +121,7 @@ def login(body: LoginRequest, request: Request, response: Response) -> CurrentUs
             pass
         else:
             require_csrf(request, previous)
+    limit_auth(request, "login", body.email)
     token = service.login(body.email, body.password.get_secret_value(), previous)
     response.set_cookie(
         COOKIE,

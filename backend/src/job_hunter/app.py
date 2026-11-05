@@ -3,21 +3,23 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.concurrency import run_in_threadpool
 
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
-from job_hunter.api.sessions import browser_guard
+from job_hunter.api.sessions import browser_guard, limit_auth
 from job_hunter.api.sessions import router as sessions_router
 from job_hunter.application.accounts import RegisterAccount
+from job_hunter.application.auth_limits import AuthLimits
 from job_hunter.application.sessions import Sessions
 from job_hunter.domain.accounts import InvalidRegistration, Registration
 from job_hunter.infrastructure.accounts import (
     Argon2Passwords,
     PostgresAccounts,
+    PostgresAuthCounter,
     PostgresSessions,
 )
 from job_hunter.infrastructure.database import Database
@@ -74,6 +76,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if database is not None
         else None
     )
+    app.state.auth_limits = (
+        AuthLimits(PostgresAuthCounter(database), lambda: datetime.now(UTC))
+        if database is not None
+        else None
+    )
     install_error_handlers(app)
     app.add_middleware(RequestBoundary, settings=config)
 
@@ -96,9 +103,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     @app.post("/api/auth/register", status_code=202)
-    def register(body: RegistrationRequest) -> RegistrationResult:
+    def register(body: RegistrationRequest, request: Request) -> RegistrationResult:
+        if registration is not None:
+            limit_auth(request, "registration", body.email)
         try:
-            request = Registration(body.email, body.password.get_secret_value())
+            values = Registration(body.email, body.password.get_secret_value())
         except InvalidRegistration as error:
             raise RequestValidationError(
                 [
@@ -111,7 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from None
         if registration is None:
             raise HTTPException(503)
-        registration.execute(request)
+        registration.execute(values)
         return RegistrationResult()
 
     app.include_router(sessions_router)

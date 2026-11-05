@@ -1,4 +1,7 @@
-from datetime import datetime
+import hmac
+import math
+import secrets
+from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from argon2 import PasswordHasher, Type
@@ -7,8 +10,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
+    LargeBinary,
     String,
     UniqueConstraint,
+    case,
+    delete,
+    or_,
     select,
     update,
 )
@@ -17,9 +25,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Mapped, mapped_column
 
 from job_hunter.application.accounts import AccountWriter, Passwords
+from job_hunter.application.auth_limits import AuthCounter
 from job_hunter.application.sessions import Credential, SessionStore
 from job_hunter.domain.accounts import (
     InvalidRegistration,
+    RateBucket,
     Registration,
     SessionUser,
     Unauthenticated,
@@ -242,3 +252,95 @@ class PostgresSessions(SessionStore):
                 .where(SessionRecord.token_hash == digest)
                 .values(revoked_at=now)
             )
+
+
+class AuthRateKey(Base):
+    __tablename__ = "auth_rate_key"
+    __table_args__ = (
+        CheckConstraint(
+            "id = '00000000-0000-0000-0000-000000000000'::uuid "
+            "AND octet_length(secret) = 32",
+            name="ck_auth_rate_key",
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    secret: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class AuthRateBucket(Base):
+    __tablename__ = "auth_rate_buckets"
+    __table_args__ = (
+        UniqueConstraint("key_hash", name="uq_auth_rate_bucket"),
+        CheckConstraint("count BETWEEN 1 AND 30", name="ck_auth_rate_count"),
+        CheckConstraint("key_hash ~ '^[0-9a-f]{64}$'", name="ck_auth_rate_hash"),
+        Index("ix_auth_rate_expiry", "expires_at"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    key_hash: Mapped[str] = mapped_column(String(64))
+    count: Mapped[int]
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PostgresAuthCounter(AuthCounter):
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def consume(
+        self, buckets: tuple[RateBucket, ...], now: datetime, window: timedelta
+    ) -> int:
+        require_utc(now)
+        # Commit cleanup separately to avoid lock cycles with consumption.
+        with self.database.transaction() as session:
+            expired = (
+                select(AuthRateBucket.id)
+                .where(AuthRateBucket.expires_at <= now)
+                .order_by(AuthRateBucket.expires_at)
+                .limit(100)
+                .with_for_update(skip_locked=True)
+            )
+            session.execute(
+                delete(AuthRateBucket).where(AuthRateBucket.id.in_(expired))
+            )
+        with self.database.transaction() as session:
+            secret = session.scalar(select(AuthRateKey.secret))
+            if secret is None:
+                session.execute(
+                    insert(AuthRateKey)
+                    .values(id=UUID(int=0), secret=secrets.token_bytes(32))
+                    .on_conflict_do_nothing()
+                )
+                secret = session.scalars(select(AuthRateKey.secret)).one()
+            for bucket in buckets:
+                digest = hmac.digest(secret, bucket.identifier.encode(), "sha256").hex()
+                expired_key = AuthRateBucket.expires_at <= now
+                allowed = session.scalar(
+                    insert(AuthRateBucket)
+                    .values(
+                        id=uuid4(),
+                        key_hash=digest,
+                        count=1,
+                        expires_at=now + window,
+                    )
+                    .on_conflict_do_update(
+                        constraint="uq_auth_rate_bucket",
+                        set_={
+                            "count": case(
+                                (expired_key, 1), else_=AuthRateBucket.count + 1
+                            ),
+                            "expires_at": case(
+                                (expired_key, now + window),
+                                else_=AuthRateBucket.expires_at,
+                            ),
+                        },
+                        where=or_(expired_key, AuthRateBucket.count < bucket.limit),
+                    )
+                    .returning(AuthRateBucket.id)
+                )
+                if allowed is None:
+                    expires = session.scalars(
+                        select(AuthRateBucket.expires_at).where(
+                            AuthRateBucket.key_hash == digest
+                        )
+                    ).one()
+                    return max(1, math.ceil((expires - now).total_seconds()))
+            return 0

@@ -91,12 +91,10 @@ def install_error_handlers(app: FastAPI) -> None:
             assert isinstance(error, HTTPException)
             status = error.status_code
         response = error_response(status, request.state.request_id, fields)
-        if (
-            isinstance(error, HTTPException)
-            and error.headers
-            and "Allow" in error.headers
-        ):
-            response.headers["Allow"] = error.headers["Allow"]
+        if isinstance(error, HTTPException) and error.headers:
+            for header in ("Allow", "Retry-After"):
+                if header in error.headers:
+                    response.headers[header] = error.headers[header]
         return response
 
     for exception in (
