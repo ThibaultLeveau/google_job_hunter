@@ -52,7 +52,9 @@ class RequestBoundary:
                 if origin is not None and origin in self.settings.allowed_origins:
                     outgoing["Access-Control-Allow-Origin"] = origin
                     outgoing["Access-Control-Allow-Credentials"] = "true"
-                    outgoing["Access-Control-Expose-Headers"] = "X-Request-ID"
+                    outgoing["Access-Control-Expose-Headers"] = (
+                        "X-Request-ID, Retry-After"
+                    )
                     outgoing.add_vary_header("Origin")
             await send(message)
 
@@ -104,13 +106,14 @@ class RequestBoundary:
                 },
             )(scope, receive, safe_send)
             return
+        max_bytes = self.settings.request_max_bytes
+        if scope["path"].startswith("/api/auth/"):
+            max_bytes = min(max_bytes, 8192)
         lengths = headers.getlist("content-length")
         if len(lengths) > 1 or (lengths and not lengths[0].isdecimal()):
             await reject(400)
             return
-        if lengths and (
-            len(lengths[0]) > 16 or int(lengths[0]) > self.settings.request_max_bytes
-        ):
+        if lengths and (len(lengths[0]) > 16 or int(lengths[0]) > max_bytes):
             await reject(413)
             return
         body = bytearray()
@@ -121,7 +124,7 @@ class RequestBoundary:
                     if message["type"] == "http.disconnect":
                         return
                     chunk = message.get("body", b"")
-                    if len(body) + len(chunk) > self.settings.request_max_bytes:
+                    if len(body) + len(chunk) > max_bytes:
                         await reject(413)
                         return
                     body.extend(chunk)

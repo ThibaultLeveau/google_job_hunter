@@ -39,7 +39,7 @@ From `backend/`, install and start the API locally:
 
 ```bash
 uv sync --locked
-uv run --locked uvicorn job_hunter.app:create_app --factory --host 127.0.0.1 --port 8000
+uv run --locked uvicorn job_hunter.app:create_app --factory --host 127.0.0.1 --port 8000 --no-proxy-headers
 ```
 
 `GET http://127.0.0.1:8000/api/health/live` returns `200` with `{"status":"ok"}`.
@@ -151,12 +151,35 @@ is sent only in a host-only `job_hunter_session` cookie, scoped to `/api`, with 
 both an allowed `Origin` and `X-CSRF-Token`, including another login and `POST /api/auth/logout`.
 Login rotates the token and revokes the previous session; logout revokes it and clears the cookie.
 Do not put session tokens in browser storage. Missing, invalid, expired or revoked sessions return
-`401 unauthenticated`; invalid credentials use that same safe result. Email verification and
-attempt limits remain later issues. Last-seen updates never refresh authentication recency or expiry.
+`401 unauthenticated`; invalid credentials use that same safe result. Email verification delivery
+remains a later issue. Last-seen updates never refresh authentication recency or expiry.
 
 Protected routes depend on `job_hunter.api.sessions.authenticated_user`. Scope private queries by
 its `user_id`, never a submitted owner; return 404 for absent or foreign records. When a loaded
 record needs an ownership check, `SessionUser.require_owner` applies the same 404 convention.
+Uploads and paid search/AI routes must use `verified_user`; unverified accounts receive 403 there.
+Account state, verification/resend and logout use ordinary authentication, so verification remains reachable.
+
+Authentication requests have an 8 KiB body cap (or the smaller configured limit), bounded email/password
+fields and generic errors. `limit_auth` consumes shared PostgreSQL counters before password work;
+all instances use the same persistent, private HMAC key. Counters contain no raw email or IP values.
+Keep `auth_rate_key` private and preserve it with database backups. At most 100 expired buckets are
+reclaimed per attempt in a separate transaction; a live bucket's count never exceeds its limit.
+
+| Action (independent counters) | Window | Per IP | Per normalized email |
+| --- | --- | --- | --- |
+| Registration, recovery, verification resend | 1 hour | 20 | 3 |
+| Login | 5 minutes | 30 | 5 |
+| OAuth start | 5 minutes | 30 | — |
+| Verification | 5 minutes | 30 | 10 |
+
+IPv4-mapped addresses share their IPv4 counter; IPv6 addresses share a /64. Missing/invalid peers
+share an unknown-peer counter. The API uses only the ASGI client address, never request forwarding
+headers. Direct Uvicorn uses `--no-proxy-headers`; behind a proxy, enable proxy headers only with an
+explicit `--forwarded-allow-ips` list, and require that proxy to replace incoming forwarding headers.
+Never trust `*`. Limited requests return 429 with `Retry-After` seconds, also readable through CORS.
+Recovery, OAuth and verification adapters must call `limit_auth` with their matching action when added;
+this policy adds no placeholder routes or provider calls.
 
 ### Local PostgreSQL and migrations
 
