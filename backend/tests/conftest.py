@@ -36,6 +36,9 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in os.environ:
         if name.startswith("JOB_HUNTER_"):
             monkeypatch.delenv(name)
+    monkeypatch.setenv(
+        "JOB_HUNTER_TRUSTED_HOSTS", '["testserver", "localhost", "127.0.0.1"]'
+    )
 
 
 @pytest.fixture

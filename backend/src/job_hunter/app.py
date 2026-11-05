@@ -6,6 +6,8 @@ from fastapi import FastAPI, Response
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from job_hunter.api.boundary import RequestBoundary
+from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
 from job_hunter.infrastructure.database import Database
 from job_hunter.settings import Settings, load_settings
 
@@ -37,7 +39,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url="/openapi.json" if config.docs_enabled else None,
         lifespan=lifespan,
+        responses={status: {"model": ErrorEnvelope} for status in ERRORS},
     )
+    install_error_handlers(app)
+    app.add_middleware(RequestBoundary, settings=config)
 
     @app.get("/api/health/live")
     def health() -> HealthResponse:

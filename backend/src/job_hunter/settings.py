@@ -1,5 +1,8 @@
+import re
+from urllib.parse import urlsplit
+
 from pydantic import Field, SecretStr, ValidationError, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict, SettingsError
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
@@ -18,6 +21,41 @@ class Settings(BaseSettings):
     docs_enabled: bool = False
     database_url: SecretStr | None = None
     database_pool_size: int = Field(default=5, ge=1, le=20)
+    trusted_hosts: tuple[str, ...] = ("localhost", "127.0.0.1")
+    allowed_origins: tuple[str, ...] = (
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    )
+    request_max_bytes: int = Field(default=1048576, ge=1, le=16777216)
+
+    @field_validator("trusted_hosts")
+    @classmethod
+    def validate_hosts(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if not values or any(
+            not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", value) for value in values
+        ):
+            raise ValueError(
+                "Use exact lowercase hostnames without wildcards or ports."
+            )
+        return values
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def validate_origins(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        for value in values:
+            origin = urlsplit(value)
+            _ = origin.port
+            if (
+                origin.scheme not in {"http", "https"}
+                or not origin.hostname
+                or origin.username is not None
+                or "*" in value
+                or value != f"{origin.scheme}://{origin.netloc}"
+            ):
+                raise ValueError(
+                    "Use exact HTTP(S) origins without paths or credentials."
+                )
+        return values
 
     @field_validator("database_url")
     @classmethod
@@ -44,6 +82,10 @@ class Settings(BaseSettings):
 def load_settings() -> Settings:
     try:
         return Settings()
+    except SettingsError:
+        raise ConfigurationError(
+            "Invalid application settings. Check JOB_HUNTER_ variables."
+        ) from None
     except ValidationError as error:
         # Report known field names only; validator messages may contain raw input.
         fields = sorted(
