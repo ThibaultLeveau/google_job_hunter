@@ -231,9 +231,35 @@ publication transaction. Generic UUID references cannot enforce foreign keys to 
 An authorized retry supplies the same logical key and observed generation. It reopens only failed
 tasks, resets attempts, advances generation and replaces the token. Concurrent/replayed retries for
 that generation share the existing result; succeeded tasks and successful artifacts are preserved.
-These internal primitives expose no HTTP retry endpoint. Worker recovery/backoff is still #11's scope.
+These internal primitives expose no HTTP retry endpoint.
 From `backend/`, run `uv run --locked pytest --require-database tests/test_tasks.py` with the test URL
 configured above; controlled concurrent tests use separate sessions and barriers within one test.
+
+Run the separate worker from `backend/` with the same `JOB_HUNTER_DATABASE_URL`:
+
+```bash
+uv run --locked python -m job_hunter.worker --concurrency 2
+```
+
+The explicit registry in `job_hunter.worker.HANDLERS` is initially empty. Feature issues register
+real handlers; unknown kinds stay pending. Concurrency is 1–16 per process (default 2).
+Claims use 60-second leases, renewed every 20 seconds while handlers run outside transactions.
+Each claim consumes an attempt; expired leases are recovered in batches of at most 100 registered tasks.
+`RetryableTaskError` schedules full-jitter exponential backoff (1-second base, 60-second cap);
+permanent/unclassified handler errors fail immediately. Attempts never exceed the stored budget.
+Database publication errors are retryable; logs and durable errors omit exception contents.
+SIGTERM/SIGINT stop new claims and drain active handlers, maintaining their leases.
+Handlers must bound every external call; Python threads cannot forcibly stop an unbounded call.
+Lease loss discards a result and retains its concurrency slot until that call ends.
+
+A handler's publication callback rechecks its live subject/version, writes the validated artifact
+and enqueues the next stage in the supplied session, with no external I/O. The worker fences and
+acknowledges the stage in that same transaction; any publication failure rolls all three back.
+Committed stages are not rerun, so the next task resumes from their preserved artifacts.
+Delivery is at least once: a crash after a provider response but before commit can repeat the call.
+Handlers must reserve/reconcile user and global budgets before paid calls and use provider
+idempotency where available, including any SDK retries. No provider handlers or paid calls exist yet.
+Tests inject clock/sleep and jitter, plus deterministic handlers, against real PostgreSQL.
 
 The following are **planned command contracts, not working setup instructions**.
 They were checked against the linked foundation issues; those PRs must implement and verify them.
@@ -241,7 +267,6 @@ Supported Python/Node minors and dependency versions are deliberately resolved a
 
 | Available after | Working directory | Planned commands or contract |
 | --- | --- | --- |
-| [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11) | `backend/` | Supplies the separate worker command and registered handlers |
 | [#20](https://github.com/ThibaultLeveau/google_job_hunter/issues/20) | Backend / frontend | Supplies deterministic OpenAPI export and ignored type generation before frontend checks/build/tests |
 
 Normal CI uses deterministic provider fixtures and requires no Google, mail, SerpApi, LLM or embedding secret.
