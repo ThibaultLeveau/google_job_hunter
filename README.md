@@ -399,6 +399,23 @@ Password proof shares login limits (5/account and 30/IP per five minutes); Googl
 
 ### Accepted profile facts
 
+The verified-owner `/profile` page shows accepted skills, experience and projects, with explicit
+unknown dates and empty sections. Manual values, source-supported facts and unavailable evidence are
+distinguished; expandable evidence shows literal quotes, original language and authorized source downloads.
+Skills can be added and removed with keyboard controls. Exact duplicates keep the existing wording.
+Writes use the current profile revision and invalidate its query; conflicts preserve drafts and require
+an explicit reload/review before retrying. Failed refreshes keep visible facts marked out of date and block
+writes. Account changes clear cached facts and remount the form; late responses cannot restore old data.
+Changed accepted facts require job evaluations to refresh; evaluation processing is implemented later.
+Experience/project editors and document upload/review controls remain in their separate issues.
+
+Issue #31 browser validation used real API/worker/PostgreSQL services with fixture extraction. Keyboard
+addition, duplicate handling, removal, evidence expansion, conflict recovery and focus restoration passed.
+All 320/768/1440px layouts at 100%/200% text scaling, with reduced motion and long/literal hostile text,
+had no horizontal overflow or automated WCAG A/AA violations. Visually checked
+[desktop](docs/validation/issue-31-desktop.jpg) and [mobile](docs/validation/issue-31-mobile.jpg) captures
+record the accepted-profile state; automated scans do not establish complete accessibility conformance.
+
 Verified sessions can read `GET /api/v1/profile` and `/api/v1/profile/facts/{id}`. Ownership comes
 only from the session; foreign and missing facts return the same 404. The profile ID is the owner's
 UUID. An untouched profile reads as revision zero with no facts; the first write materializes it.

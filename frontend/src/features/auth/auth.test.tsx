@@ -16,6 +16,7 @@ const failure = (status: number, fields: { field: string; message: string }[] = 
   HttpResponse.json({ code: 'fixture', message: 'Request failed.', field_errors: fields,
     request_id: 'bcb2f310-f4a5-4a2d-9871-a220704e5da8' }, { status, headers });
 beforeEach(() => {
+  server.use(http.get('http://localhost/api/v1/profile', () => HttpResponse.json({ id: owner.id, revision: 0, facts: [] })));
   sessionStorage.clear();
   server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })));
   api.queryClient.setQueryDefaults(['auth-providers'], { retry: false });
@@ -158,7 +159,7 @@ test('clears a verification URL, keeps its token through inline login and confir
   expect(screen.getByText('Your account email is verified.')).toHaveFocus();
   expect(calls).toBe(1); expect(JSON.stringify(window.history.state)).not.toContain(token);
   await user.click(screen.getByRole('link', { name: 'Continue to your profile' }));
-  expect(await screen.findByText('Profile tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('No skills yet. Add a skill you want to use in your job search.')).toBeVisible();
 });
 
 test('treats expired, replayed or foreign token acceptance as unverified and offers resend', async () => {
@@ -311,7 +312,7 @@ test('falls back safely when callback storage is unavailable and retries an unav
   current = { ...owner, email_verified: true };
   server.use(http.get('http://localhost/api/auth/me', () => HttpResponse.json(current)));
   await user.click(screen.getByRole('button', { name: 'Check session again' }));
-  expect(await screen.findByText('Profile tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('No skills yet. Add a skill you want to use in your job search.')).toBeVisible();
 });
 
 test('handles a later callback in the same page and preserves the existing account after cancellation', async () => {
@@ -322,7 +323,7 @@ test('handles a later callback in the same page and preserves the existing accou
   expect(await screen.findByText('Use your existing sign-in method')).toBeVisible();
   expect(window.location.hash).toBe('');
   await user.click(screen.getByRole('link', { name: 'Return to your workspace' }));
-  expect(await screen.findByText('Profile tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('No skills yet. Add a skill you want to use in your job search.')).toBeVisible();
 });
 
 test.each(['known@example.org', 'unknown@example.org'])('makes the same generic recovery request for %s', async email => {
