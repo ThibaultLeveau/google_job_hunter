@@ -7,6 +7,7 @@ import { api, ApiError, sessionKey, type Session } from '../../shared/api';
 import { Badge, Button, StatePanel } from '../../shared/ui';
 import { arrangements, fact, salary, sourceLink, timestamp } from './jobDisplay';
 import { MatchExplanation } from './MatchExplanation';
+import { JobProcessing } from './JobProcessing';
 
 type Detail = components['schemas']['JobDetail'];
 type Citation = components['schemas']['Citation'];
@@ -103,5 +104,6 @@ export function JobDetail({ ownerId }: { ownerId: string }) {
         : <p>Preserved source text is unavailable.</p>}
     </section>
     <MatchExplanation key={data.status.id} data={data} ownerId={ownerId} queryId={id} unavailable={sourceUnavailable(data)} refreshing={query.isFetching} />
+    <JobProcessing key={`processing-${data.status.id}`} initial={data.status} updatedAt={query.dataUpdatedAt} ownerId={ownerId} queryId={id} />
   </div>;
 }

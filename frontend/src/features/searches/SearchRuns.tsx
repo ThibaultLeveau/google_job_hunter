@@ -3,16 +3,15 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import type { components } from '../../../generated/api';
 import { api, ApiError } from '../../shared/api';
 import { Badge, Button } from '../../shared/ui';
+import { isProcessing, processingHelp } from '../../shared/processing';
 import type { SavedSearch } from './SearchEditor';
 
 type Run = components['schemas']['SearchRun'];
 type Attempt = { search: SavedSearch; key: string };
-const active = (run: Run) => run.status === 'pending' || run.status === 'running';
+const active = (run: Run) => isProcessing(run.status);
 const labels: Record<Run['status'], string> = { pending: 'Discovery queued', running: 'Discovering', completed: 'Discovery complete', partial: 'Partial discovery', failed: 'Discovery failed', cancelled: 'Discovery cancelled' };
 function failureHelp(code: string) {
-  if (['disabled', 'unconfigured', 'authentication'].includes(code)) return 'Search configuration needs attention. Contact your workspace administrator.';
-  if (code === 'quota') return 'The search quota is exhausted. Wait for capacity or contact your workspace administrator.';
-  if (code === 'rate_limited') return 'Search is temporarily rate limited. Wait before starting another run.';
+  if (['disabled', 'unconfigured', 'authentication', 'quota', 'rate_limited'].includes(code)) return processingHelp(code, 'Search');
   if (code === 'input_limit' || code === 'invalid_response') return 'Discovery could not use these results. Review the search before starting another run.';
   return 'Discovery stopped after a temporary failure. Review the results before starting another run.';
 }

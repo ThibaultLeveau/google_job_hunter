@@ -1,4 +1,4 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -44,9 +44,10 @@ beforeEach(() => {
   api.clearSession(); api.queryClient.clear(); current = owner; data = fixture(); api.queryClient.setQueryDefaults(sessionKey, { retry: false });
   scroll.mockClear(); vi.spyOn(window, 'scrollTo').mockImplementation(scroll);
   server.use(http.get('http://localhost/api/auth/me', () => current ? HttpResponse.json(current) : failure(401)),
-    http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })), http.get(path, () => HttpResponse.json(data)));
+    http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })), http.get(path, () => HttpResponse.json(data)),
+    http.get(path + '/status', () => HttpResponse.json(data.status)));
 });
-afterEach(() => { api.clearSession(); api.queryClient.clear(); });
+afterEach(() => { vi.useRealTimers(); focusManager.setFocused(undefined); api.clearSession(); api.queryClient.clear(); });
 
 test('opens a deep link with source facts, original salary units and safe posting navigation', async () => {
   mount(`/jobs/${id.toUpperCase()}`); expect(await screen.findByRole('heading', { name: 'Senior engineer' })).toBeVisible();
@@ -317,4 +318,141 @@ test('refreshes the viewed alias after reevaluating its canonical job', async ()
   }));
   const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Reevaluate profile match'));
   await screen.findByText(/2 reevaluation requests remain/); expect(reads).toBe(2); expect(screen.getByText('Outdated match score')).toBeVisible();
+});
+
+type Stage = components['schemas']['StageStatus'];
+function stages(changes: Partial<Record<Stage['stage'], Stage['state']>> = {}): Stage[] {
+  return (['fetch', 'text', 'clean', 'chunks', 'embed', 'metadata', 'requirements'] as const).map(stage => ({ stage, state: changes[stage] ?? 'completed',
+    revision: `${stage}:private-task-version`, generation: 0, reason: null, created_at: now, updated_at: now, retryable: changes[stage] === 'failed' }));
+}
+const processing = () => within(screen.getByRole('region', { name: 'Processing status' }));
+async function advance(ms = 50) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
+function fakeClock() { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] }); }
+
+test('polls active stages only while visible, refreshes content on completion, and stops terminal polling', async () => {
+  fakeClock(); data.status.stages = stages({ embed: 'running' }); data.status.embeddings_ready = false; let reads = 0;
+  server.use(http.get(path + '/status', () => { reads++; return HttpResponse.json(data.status); })); mount(); await advance();
+  await vi.waitFor(() => { expect(screen.getByRole('heading', { name: 'Senior engineer' })).toBeVisible(); });
+  await advance(4800); expect(reads).toBe(0); await advance(300); expect(reads).toBe(1);
+  expect(processing().getByText('Processing')).toBeVisible(); expect(screen.queryByText('Salary unknown')).not.toBeInTheDocument();
+  act(() => { focusManager.setFocused(false); }); await advance(15000); expect(reads).toBe(1);
+  data.status.stages = stages(); data.status.embeddings_ready = true; if (!data.requirements) throw new Error('Missing requirements'); data.requirements.summary = 'Updated checklist';
+  act(() => { focusManager.setFocused(true); }); await advance(5000); await advance();
+  await vi.waitFor(() => { expect(screen.getByText('Updated checklist')).toBeVisible(); }); const completed = reads;
+  expect(processing().getByText(/No active work is reported/)).toBeVisible(); await advance(20000); expect(reads).toBe(completed);
+});
+
+test('does not poll future waiting stages without an active attempt or a terminal unsupported source', async () => {
+  fakeClock(); data.status = { ...data.status, analysis_ready: false, match_pending: true, match_current: false, stages: stages({ fetch: 'unsupported', text: 'pending', clean: 'pending' }).map(stage => ({ ...stage, generation: stage.stage === 'fetch' ? 0 : null })) };
+  let reads = 0; server.use(http.get(path + '/status', () => { reads++; return HttpResponse.json(data.status); })); mount(); await advance();
+  await vi.waitFor(() => { expect(screen.getByRole('heading', { name: 'Processing status' })).toBeVisible(); }); await advance(20000); expect(reads).toBe(0);
+  expect(processing().getByText('Unsupported')).toBeVisible(); expect(processing().queryByRole('button', { name: /^Retry / })).not.toBeInTheDocument();
+});
+
+test('tracks a pending private evaluation and stops once it is current', async () => {
+  fakeClock(); data = withMatch(); data.status = { ...data.status, stages: stages(), match_current: false, match_pending: true, match_stale: true, match_state: 'stale' }; let reads = 0;
+  server.use(http.get(path + '/status', () => { reads++; return HttpResponse.json(data.status); })); mount(); await advance(); await vi.waitFor(() => { expect(screen.getByText('Outdated match score')).toBeVisible(); });
+  data.status = { ...data.status, match_current: true, match_pending: false, match_stale: false, match_state: 'current' }; await advance(5000); await advance();
+  await vi.waitFor(() => { expect(screen.getByText('Current evaluation')).toBeVisible(); }); const completed = reads; await advance(10000); expect(reads).toBe(completed);
+});
+
+test.each(['http_denied', 'quota', 'timed_out', 'invalid_response', 'limits', 'http_removed', 'empty_page', 'javascript_required', 'provider-secret-<script>'])('shows safe processing guidance for %s and keeps available content', async reason => {
+  data.status.stages = stages({ fetch: 'failed', clean: 'degraded' }); data.status.stages[0] = { ...data.status.stages[0] as Stage, reason };
+  mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); expect(processing().getByText('Partly ready')).toBeVisible();
+  expect(processing().getByText(/Some evidence is incomplete/)).toBeVisible(); expect(screen.getByText('EUR 50000–70000 / year · gross')).toBeVisible();
+  expect(processing().getByRole('button', { name: 'Retry posting download' })).toBeEnabled(); expect(screen.queryByText(/private-task-version/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/provider-secret/)).not.toBeInTheDocument(); expect(document.querySelector('script')).toBeNull();
+  const message = reason === 'http_denied' ? /Source access is denied/ : reason === 'quota' ? /processing quota is exhausted/ : reason === 'timed_out' ? /Processing timed out/
+    : reason === 'invalid_response' ? /evidence could not be verified/ : reason === 'limits' ? /Processing limits were reached/ : reason === 'http_removed' ? /original posting was removed/
+      : reason === 'empty_page' ? /No usable job posting/ : reason === 'javascript_required' ? /source cannot be processed/ : /Processing could not complete/;
+  expect(processing().getByText(message)).toBeVisible();
+});
+
+test('stops polling on a status read failure, keeps facts and resumes on explicit refresh', async () => {
+  fakeClock(); data.status.stages = stages({ text: 'running' }); let reads = 0, fail = true;
+  server.use(http.get(path + '/status', () => { reads++; return fail ? failure(503) : HttpResponse.json(data.status); })); mount(); await advance();
+  await vi.waitFor(() => { expect(screen.getByRole('heading', { name: 'Senior engineer' })).toBeVisible(); }); await advance(5000); await advance();
+  expect(processing().getByRole('alert')).toHaveTextContent('could not be refreshed'); const failed = reads; await advance(15000); expect(reads).toBe(failed);
+  fail = false; act(() => { button('Refresh processing status').click(); }); await advance();
+  await vi.waitFor(() => { expect(processing().queryByRole('alert')).not.toBeInTheDocument(); }); await advance(5000); expect(reads).toBeGreaterThan(failed + 1);
+  expect(screen.getByRole('heading', { name: 'Senior engineer' })).toBeVisible();
+});
+
+test('cancels a pending status request and removes its cache on unmount', async () => {
+  fakeClock(); data.status.stages = stages({ clean: 'running' }); const deferred = gate(); let started = false, aborted = false;
+  server.use(http.get(path + '/status', async ({ request }) => { started = true; request.signal.addEventListener('abort', () => { aborted = true; }); await deferred.pending; return HttpResponse.json(data.status); }));
+  const view = mount(); await advance(); await vi.waitFor(() => { expect(screen.getByRole('heading', { name: 'Senior engineer' })).toBeVisible(); }); await advance(5000);
+  await vi.waitFor(() => { expect(started).toBe(true); }); view.unmount(); expect(aborted).toBe(true); deferred.release(); await advance();
+  expect(api.queryClient.getQueriesData({ queryKey: ['job-status'] })).toEqual([]);
+});
+
+test('submits one permitted retry with the exact stage fence and displays the shared reopened attempt', async () => {
+  data.status.stages = stages({ fetch: 'failed' }); const deferred = gate(); let writes = 0, body: unknown;
+  server.use(http.post(path + '/retry', async ({ request }) => { writes++; body = await request.json(); expect(request.headers.get('X-CSRF-Token')).toBe(owner.csrf_token); await deferred.pending;
+    data.status.stages = stages({ fetch: 'running' }).map(stage => ({ ...stage, generation: stage.stage === 'fetch' ? 1 : 0 })); data.status.retries_remaining = 4;
+    return HttpResponse.json({ generation: 1, status: 'accepted' }, { status: 202 }); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.dblClick(button('Retry posting download'));
+  expect(writes).toBe(1); expect(button('Requesting retry…')).toBeDisabled(); expect(body).toMatchObject({ stage: 'fetch', revision: 'fetch:private-task-version', expected_generation: 0 });
+  expect(Object.keys(body as object).sort()).toEqual(['expected_generation', 'idempotency_key', 'revision', 'stage']); deferred.release();
+  await screen.findByText(/4 processing retry requests remain/); expect(processing().getByText('Processing')).toBeVisible(); expect(screen.queryByRole('button', { name: 'Retry posting download' })).not.toBeInTheDocument();
+});
+
+test('reuses the retry receipt key after an uncertain response without hiding available content', async () => {
+  data.status.stages = stages({ metadata: 'failed' }); const bodies: unknown[] = []; let fail = true;
+  server.use(http.post(path + '/retry', async ({ request }) => { bodies.push(await request.json()); if (fail) return HttpResponse.error();
+    data.status.stages = stages(); data.status.retries_remaining = 4; return HttpResponse.json({ generation: 1, status: 'accepted' }, { status: 202 }); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Retry job facts'));
+  expect(await processing().findByRole('alert')).toHaveTextContent('could not be confirmed'); expect(screen.getByRole('heading', { name: 'Senior engineer' })).toBeVisible(); fail = false;
+  await user.click(button('Retry job facts')); await screen.findByText(/Retry accepted/); expect(bodies).toHaveLength(2); expect(bodies[1]).toEqual(bodies[0]);
+});
+
+test.each([409, 429])('refreshes status after a retry refusal %s without displaying private errors', async status => {
+  data.status.stages = stages({ fetch: 'failed' }); server.use(http.post(path + '/retry', () => { if (status === 429) data.status.retries_remaining = 0; else data.status.stages = stages({ fetch: 'running' }); return failure(status); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Retry posting download'));
+  expect(await processing().findByRole('alert')).toHaveTextContent(status === 429 ? 'allowance exhausted' : 'attempt changed');
+  if (status === 429) await waitFor(() => { expect(button('Retry posting download')).toBeDisabled(); });
+  else await waitFor(() => { expect(screen.queryByRole('button', { name: 'Retry posting download' })).not.toBeInTheDocument(); });
+  expect(screen.queryByText('Private failure detail')).not.toBeInTheDocument();
+});
+
+test.each([401, 403])('clears all private processing state when retry authorization expires (%s)', async status => {
+  data.status.stages = stages({ fetch: 'failed' }); server.use(http.post(path + '/retry', () => { current = null; return failure(status); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Retry posting download')); await screen.findByText(/Your session has expired/);
+  expect(api.queryClient.getQueriesData({ queryKey: ['job-status'] })).toEqual([]); expect(screen.queryByRole('heading', { name: 'Senior engineer' })).not.toBeInTheDocument();
+});
+
+test('never exposes prior-owner processing state after a late retry response', async () => {
+  data.status.stages = stages({ fetch: 'failed' }); const deferred = gate(); let aborted = false;
+  server.use(http.post(path + '/retry', async ({ request }) => { request.signal.addEventListener('abort', () => { aborted = true; }); await deferred.pending; return HttpResponse.json({ generation: 1, status: 'accepted' }, { status: 202 }); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Retry posting download'));
+  server.use(http.get(path, () => failure(404))); act(() => { current = { ...owner, id: snapshot }; api.acceptSession(current); }); await screen.findByText('Job unavailable');
+  deferred.release(); await act(async () => { await deferred.pending; }); expect(aborted).toBe(true); expect(screen.queryByRole('heading', { name: 'Processing status' })).not.toBeInTheDocument();
+  expect(api.queryClient.getQueriesData({ queryKey: ['job-status', owner.id] })).toEqual([]);
+});
+
+test('uses fresh shared status when a retry receipt refers to an already completed older attempt', async () => {
+  data.status.stages = stages({ fetch: 'failed' }); server.use(http.post(path + '/retry', () => {
+    data.status.stages = stages().map(stage => ({ ...stage, revision: `${stage.stage}:new-version`, generation: 2 }));
+    return HttpResponse.json({ generation: 1, status: 'accepted' }, { status: 202 });
+  }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Retry posting download'));
+  await screen.findByText(/Retry accepted/); expect(processing().getByText(/No active work is reported/)).toBeVisible();
+  expect(processing().queryByRole('button', { name: /^Retry / })).not.toBeInTheDocument(); expect(processing().queryByText('Pending')).not.toBeInTheDocument();
+});
+
+test('starts polling when reevaluation changes a previously terminal detail state', async () => {
+  fakeClock(); data = withMatch(); data.status.stages = stages(); let reads = 0;
+  server.use(http.get(path + '/status', () => { reads++; return HttpResponse.json(data.status); }), http.post(path + '/reevaluate', () => {
+    data.status = { ...data.status, match_state: 'stale', match_current: false, match_pending: true, match_stale: true }; return HttpResponse.json({ generation: 2, status: 'accepted' }, { status: 202 });
+  }));
+  mount(); await advance(); await vi.waitFor(() => { expect(button('Reevaluate profile match')).toBeEnabled(); });
+  act(() => { button('Reevaluate profile match').click(); }); await advance(); await vi.waitFor(() => { expect(screen.getByText('Outdated match score')).toBeVisible(); });
+  expect(processing().getByText(/Active work refreshes/)).toBeVisible(); await advance(5000); expect(reads).toBeGreaterThan(0);
+});
+
+test('removes available detail content when a status refresh reports lost discovery access', async () => {
+  data.status.stages = stages(); const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' });
+  server.use(http.get(path + '/status', () => failure(404)), http.get(path, () => failure(404))); await user.click(button('Refresh processing status'));
+  await screen.findByText('Job unavailable'); expect(screen.queryByRole('heading', { name: 'Senior engineer' })).not.toBeInTheDocument();
+  expect(api.queryClient.getQueriesData({ queryKey: ['job-status'] })).toEqual([]);
 });

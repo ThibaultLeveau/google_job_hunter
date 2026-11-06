@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import type { components } from '../../../generated/api';
 import { api, ApiError } from '../../shared/api';
 import { Badge, Button } from '../../shared/ui';
+import { isProcessing, processingHelp, processingStates } from '../../shared/processing';
 import { ProposalReview } from '../profile/ProposalReview';
 
 type Document = components['schemas']['Document'];
@@ -11,15 +12,14 @@ type Proposals = components['schemas']['ProposalPage'];
 type Snapshot = components['schemas']['ProfileSnapshot'];
 const root = '/api/v1/documents';
 const mediaTypes: Record<string, string> = { pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain' };
-const active = new Set(['queued', 'processing', 'deleting', 'waiting_for_parse', 'pending', 'running']);
-const labels = { queued: 'Waiting to parse', processing: 'Parsing', ready: 'Parsed', failed: 'Parsing failed', unsupported: 'Unsupported', deleting: 'Deleting', deleted: 'Deleted' };
+const labels = { queued: 'Waiting to parse', processing: 'Parsing', ready: 'Parsed', failed: 'Parsing failed', unsupported: processingStates.unsupported, deleting: 'Deleting', deleted: 'Deleted' };
 const extractionLabels = { waiting_for_parse: 'Waiting to parse', pending: 'Waiting for extraction', running: 'Extracting facts', failed: 'Extraction failed. Try a corrected document or add facts manually.', unavailable: 'Extraction unavailable. You can add facts manually.', ready: 'Extraction complete' };
 const parseHelp: Record<NonNullable<Document['parse_error']>, string> = {
   ocr_required: 'This scanned PDF needs OCR. Upload a text-based PDF, DOCX or TXT; OCR is not available here.',
   encrypted_document: 'This document is password-protected. Upload an unlocked copy.',
   empty_document: 'No readable text was found. Upload a document containing text.',
   limits_exceeded: 'This document exceeds parsing limits. Upload a shorter, simpler document.',
-  timed_out: 'Parsing timed out. Try a shorter, simpler document.',
+  timed_out: processingHelp('timed_out', 'Parsing'),
   cancelled: 'Parsing was cancelled. Upload a different document or add facts manually.',
   storage_unavailable: 'Document storage is unavailable. Contact your workspace administrator.',
   unsupported_format: 'This format cannot be parsed. Upload PDF, DOCX or UTF-8 TXT.',
@@ -54,7 +54,7 @@ function DocumentRow({ document: original, ownerId, retain, dismiss }: {
   const request = useRequestLifetime();
   const detail = useQuery<Document | Deletion>({ queryKey: key, initialData: original,
     queryFn: ({ signal }) => api.request(path, { signal }), retry: false, refetchOnWindowFocus: false,
-    refetchInterval: query => !query.state.error && active.has(query.state.data?.status ?? '')
+    refetchInterval: query => !query.state.error && isProcessing(query.state.data?.status ?? '')
       && !('error' in (query.state.data ?? {}) && (query.state.data as Deletion).error) ? 5000 : false,
     refetchIntervalInBackground: false,
   });
@@ -65,7 +65,7 @@ function DocumentRow({ document: original, ownerId, retain, dismiss }: {
       const result = await api.request<Proposals>(`${path}/proposals`, { signal });
       return { status: result.status, count: result.count ?? 0, language: result.language ?? 'Unknown' };
     }, retry: false, refetchOnWindowFocus: false, refetchIntervalInBackground: false,
-    refetchInterval: query => !query.state.error && active.has(query.state.data?.status ?? '') ? 5000 : false,
+    refetchInterval: query => !query.state.error && isProcessing(query.state.data?.status ?? '') ? 5000 : false,
   });
   const [confirming, setConfirming] = useState(false);
   const [reviewing, setReviewing] = useState(false);
