@@ -418,12 +418,12 @@ section {
 .profile-evidence ul { padding-inline-start: var(--space-4); }
 .profile-evidence blockquote { margin: var(--space-2) 0; padding-inline-start: var(--space-3); border-inline-start: 3px solid var(--color-border); }
 
-.profile-dialog {
+.profile-dialog, .settings-dialog {
   width: min(42rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto;
   padding: var(--space-6); border: 1px solid var(--color-border); border-radius: var(--radius-panel);
   background: var(--color-surface); color: var(--color-text); overflow-wrap: anywhere;
 }
-.profile-dialog::backdrop { background: rgb(34 44 42 / 65%); }
+.profile-dialog::backdrop, .settings-dialog::backdrop { background: rgb(34 44 42 / 65%); }
 .profile-editor-fields { display: grid; gap: var(--space-4); min-width: 0; border: 0; padding: 0; margin: 0; }
 .profile-date-fields { display: flex; flex-wrap: wrap; gap: var(--space-4); }
 .profile-date-fields > * { flex: 1 1 12rem; }
@@ -566,3 +566,8 @@ section {
 .job-processing-stages h4, .job-processing-stages .job-note { margin: 0; }
 .job-processing-stages h4 { flex: 1 1 13rem; }
 .job-processing-stages > li > p { margin-block: var(--space-2); }
+
+.settings-content { display: grid; gap: var(--space-4); max-width: 48rem; overflow-wrap: anywhere; }
+.settings-panel { padding: var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-panel); }
+.settings-panel h2 { margin-top: 0; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
