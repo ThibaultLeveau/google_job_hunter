@@ -168,7 +168,7 @@ class PoliteFetcher:
 
     One leased request per hostname across HTTP/HTTPS, with at least one second
     after completion. The lease exceeds the HTTP deadline by five seconds.
-    Robots rules expire after one hour; unavailable files after 60 seconds or
+    Robots rules expire after 24 hours; unavailable files after 60 seconds or
     Retry-After (at most one hour). Only 404/410 imply permission; 401/403 deny.
     Redirected, oversized, invalid UTF-8 or non-text robots files fail closed.
     Rules use JobHunter (the HTTP agent is JobHunter/0.1), RFC wildcard matching,
@@ -200,7 +200,7 @@ class PoliteFetcher:
                     body = response.body.decode("utf-8-sig", errors="strict")
                     try:
                         delay = RobotsPolicy.pacing(Protego.parse(body))
-                        decision, ttl = "rules", 3600
+                        decision, ttl = "rules", 86400
                     except RobotsDenied:
                         decision, ttl = "deny", 3600
         except FetchError as error:
