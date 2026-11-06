@@ -19,7 +19,7 @@ from job_hunter.domain.jobs import canonical_url
 from job_hunter.domain.tasks import NewTask, Task, TaskKey
 from job_hunter.infrastructure.accounts import UserRecord
 from job_hunter.infrastructure.database import Database
-from job_hunter.infrastructure.jobs import PostgresJobRegistry
+from job_hunter.infrastructure.jobs import PostgresJobRegistry, lock_job_namespace
 from job_hunter.infrastructure.searches import DISCOVERY, SearchRunRecord
 from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord
 from job_hunter.infrastructure.worker import Handler
@@ -140,6 +140,7 @@ class PostgresDiscovery:
     def publish(
         self, session: Session, task: Task, result: object, now: datetime
     ) -> None:
+        lock_job_namespace(session)
         if (
             not isinstance(result, DiscoveredPage)
             or (row := self.live(session, task, now)) is None

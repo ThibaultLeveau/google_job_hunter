@@ -7,6 +7,7 @@ from job_hunter.infrastructure import (
     jobs,  # noqa: F401 -- register job registry tables
     profiles,  # noqa: F401 -- register profile tables
     searches,  # noqa: F401 -- register search tables
+    snapshots,  # noqa: F401 -- register public snapshot tables
 )
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.tasks import TaskRecord
