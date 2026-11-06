@@ -5,33 +5,11 @@ import type { components } from '../../../generated/api';
 import { api, ApiError, sessionKey, type Session } from '../../shared/api';
 import { Badge, Button, StatePanel } from '../../shared/ui';
 import { JobFilters } from './JobFilters';
+import { arrangements, fact, salary, sourceLink, timestamp } from './jobDisplay';
 import { filterErrors, filterParams, readFilters, sortLabels } from './jobFilters';
 
 type Job = components['schemas']['JobSummary'];
 type Page = components['schemas']['JobPage'];
-const arrangements: Record<Job['remote'], string> = {
-  remote: 'Remote', hybrid: 'Hybrid', on_site: 'On site', unknown: 'Work arrangement unknown', conflicting: 'Conflicting work arrangements',
-};
-function fact(value: Job['title'], unknown: string) {
-  if (!value.status || value.status === 'unknown' || !value.values?.length) return unknown;
-  return `${value.values.join(' · ')}${value.status === 'known' ? '' : ' (uncertain)'}`;
-}
-function salary(value: Job['salary']) {
-  if (!value.status || value.status === 'unknown' || !value.values?.length) return 'Salary unknown';
-  return value.values.map(item => {
-    const amount = item.minimum === null ? item.maximum === null ? 'Amount unknown' : `Up to ${item.maximum}`
-      : item.maximum === null ? `From ${item.minimum}` : item.minimum === item.maximum ? item.minimum : `${item.minimum}–${item.maximum}`;
-    return `${item.currency ?? 'Currency unknown'} ${amount} / ${item.period ?? 'period unknown'} · ${item.basis ?? 'basis unknown'}${item.uncertain ? ' (uncertain)' : ''}`;
-  }).join('; ') + (value.status === 'known' ? '' : ' — conflicting or uncertain salary information');
-}
-function sourceLink(value: string) {
-  try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url : null; }
-  catch { return null; }
-}
-function timestamp(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'Fetch time unknown' : date.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
-}
 function matchLabel(value: Job['match']) {
   const score = value.score === null ? 'Score unknown' : `${String(value.score)}%`;
   if (value.stale) return `Stale match · ${score}`;
@@ -106,7 +84,7 @@ export function Jobs({ ownerId }: { ownerId: string }) {
         const progress = fetchLabels[job.fetch_status] ?? analysisLabels[job.analysis_status];
         return <li key={job.id}><article className="job-card" aria-labelledby={`job-${job.id}`}>
           <div className="job-card-heading"><div><h2 id={`job-${job.id}`}><Link to={`/jobs/${encodeURIComponent(job.id)}`}
-            state={{ returnTo: location.pathname + location.search }} onClick={() => {
+            state={{ returnTo: location.pathname + location.search, jobCursors: prior }} onClick={() => {
               api.queryClient.setQueryData(['jobs-position', ownerId, location.search], window.scrollY);
             }}>{title}</Link></h2><p className="job-company">{fact(job.company, 'Company unknown')}</p></div>
             {progress !== 'Analysis ready' && <Badge tone={['failed', 'removed'].includes(job.fetch_status) || job.analysis_status === 'failed' ? 'danger' : 'neutral'}>{progress}</Badge>}</div>
