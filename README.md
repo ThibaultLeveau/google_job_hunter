@@ -1785,8 +1785,10 @@ HTTP requests must remain on the local origin; unexpected requests, WebSockets a
 fail even if the UI catches them. Service workers are blocked. Future journeys reuse the private
 `control` helper for mail/OIDC observations and the existing scenario option.
 
-`Browser quality` runs the same commands in unprivileged GitHub Actions with a disposable pgvector
-service, pinned actions and bounded startup/test/shutdown deadlines. Failures retain traces,
+`Browser quality` runs the checks in unprivileged GitHub Actions with a disposable pgvector
+service, pinned actions and bounded startup/test/shutdown deadlines. Its Ubuntu runner already
+supplies Chromium libraries, so CI downloads the pinned browser without system-package upgrades.
+Failures retain traces,
 screenshots and reports under `frontend/reports/browser/` for three days. Production builds include
 only application assets; the harness and orchestration remain outside the browser bundle.
 See [Playwright's test practices](https://playwright.dev/docs/best-practices) and

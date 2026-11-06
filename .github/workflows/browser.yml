@@ -60,7 +60,7 @@ jobs:
         run: |
           npm ci
           uv sync --directory ../backend --locked
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
 
       - name: Build and run real-stack browser smoke
         run: npm run test:e2e
