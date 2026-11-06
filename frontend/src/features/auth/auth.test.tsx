@@ -260,7 +260,7 @@ test('offers Google only after configured availability is confirmed, with an exp
   expect(await screen.findByRole('link', { name: 'Sign in with Google' })).toHaveAttribute('href', '/api/auth/google/start');
 });
 
-test.each(['/jobs?filter=saved', '//outside.example', '/login', null])('stores only a safe Google return path: %s', async target => {
+test.each(['/jobs?sort=oldest', '//outside.example', '/login', null])('stores only a safe Google return path: %s', async target => {
   server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: true })));
   mount(`/login${target ? `?returnTo=${encodeURIComponent(target)}` : ''}`);
   const link = await screen.findByRole('link', { name: 'Sign in with Google' });
@@ -295,10 +295,10 @@ test.each([
 });
 
 test('refreshes a successful Google callback before opening the validated saved workspace', async () => {
-  sessionStorage.setItem('job-hunter.google-return', '/jobs?filter=saved'); current = { ...owner, email_verified: true };
+  sessionStorage.setItem('job-hunter.google-return', '/jobs?sort=oldest'); current = { ...owner, email_verified: true };
   mount('/login#google=signed_in');
   expect(await screen.findByText('No discoveries yet')).toBeVisible();
-  expect(window.location.pathname + window.location.search).toBe('/jobs?filter=saved');
+  expect(window.location.pathname + window.location.search).toBe('/jobs?sort=oldest');
   expect(window.location.hash).toBe('');
 });
 

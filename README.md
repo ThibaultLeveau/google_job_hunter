@@ -1245,7 +1245,23 @@ refresh failures and retries have explicit states. Empty lists can be refreshed.
 Title links establish `/jobs/{job_id}` with list `returnTo` context. The dedicated
 detail route/content belongs to #59; until then those links reach the existing
 not-found view. The original posting link opens the public source in a new tab.
-Advanced filter controls belong to #58.
+The filter area supports keyword, owned search run (including older runs), exact
+region, work arrangement, match status and salary comparisons. Sort by newest,
+oldest, title or match. Filters use validated URL parameters; changes reset the
+cursor, while deep links and browser back restore selections. Text waits 300 ms
+before requesting results; obsolete reads are cancelled. Clear all resets filters
+and pagination. Filtering runs on the server across all owned discoveries.
+
+Salary comparisons require both a three-letter currency and a period. Bounds retain
+up to four decimal places, including zero, without conversion. Separate toggles
+include unknown region, work arrangement or salary data when that filter is active;
+known incompatible salary units remain excluded. Invalid links and incomplete salary
+filters show associated errors. Empty filtered results offer a return to all discoveries.
+
+At mobile widths, filters open in a modal drawer with contained keyboard focus,
+Escape/close handling and focus restored to its trigger. Changes apply automatically;
+Show results applies pending valid edits immediately. Closing discards text that has
+not yet applied. Run choices and result caches remain scoped to the signed-in account.
 
 Validation uses a real API, worker and isolated PostgreSQL database with 21 fixture
 discoveries, factual and unknown metadata, and stale private matches. The keyboard
@@ -1254,6 +1270,14 @@ back navigation and recovery from an expired cursor. Layouts are checked at
 320/768/1440px and 100%/200% text size, with reduced motion and accessibility scans.
 Representative [desktop](docs/validation/issue-57-desktop.jpg) and
 [mobile](docs/validation/issue-57-mobile.jpg) captures show the list and a long title.
+
+Filter validation repeats the real API/worker/PostgreSQL journey with 21 discoveries,
+checking owned run selection, exact region/remote values, salary units and unknown
+toggles, match status, sorting, pagination reset, back navigation and deep-link reload.
+Invalid filters, empty results and all six viewport/text-size combinations pass
+accessibility scans. Keyboard checks cover every drawer control without footer occlusion, focus wrapping,
+Escape and trigger restoration. Reviewed [desktop filters](docs/validation/issue-58-desktop.jpg) and
+[mobile drawer](docs/validation/issue-58-mobile.jpg) captures record the layout.
 
 ### Job details and retry actions
 
