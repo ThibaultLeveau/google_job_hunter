@@ -88,6 +88,9 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
     assert first is not second
     assert first.openapi() == second.openapi()
     assert list(first.openapi()["paths"]) == [
+        "/api/v1/profile",
+        "/api/v1/profile/facts/{fact_id}",
+        "/api/v1/profile/facts",
         "/api/health/live",
         "/api/health/ready",
         "/api/auth/providers",

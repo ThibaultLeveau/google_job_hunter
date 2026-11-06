@@ -13,6 +13,7 @@ from starlette.responses import RedirectResponse
 
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
+from job_hunter.api.profiles import router as profiles_router
 from job_hunter.api.reauth import FLOW_COOKIE, FLOW_PATH, install_reauthentication
 from job_hunter.api.sessions import (
     COOKIE,
@@ -42,6 +43,7 @@ from job_hunter.infrastructure.oidc import (
     PostgresOidc,
     load_google_settings,
 )
+from job_hunter.infrastructure.profiles import PostgresProfiles
 from job_hunter.infrastructure.reauth import PostgresProofs, recency_seconds
 from job_hunter.infrastructure.recovery import PostgresRecovery
 from job_hunter.settings import Settings, load_settings
@@ -116,6 +118,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if database is not None
         else None
     )
+    app.state.profiles = (
+        PostgresProfiles(database, lambda: datetime.now(UTC))
+        if database is not None
+        else None
+    )
+    app.include_router(profiles_router)
     install_error_handlers(app)
     app.add_middleware(RequestBoundary, settings=config)
 
