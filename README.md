@@ -1195,6 +1195,37 @@ latest requested generation and the worker lease; rejected completions cannot re
 results. Failed evaluations require an explicit budgeted request. Fixture matching reports unknown
 fit. Job HTTP endpoints and the explanation interface remain subsequent roadmap issues.
 
+### Owned job listing
+
+Issue #55 adds authenticated `GET /api/v1/jobs`. Only live owned discovery associations
+are eligible; duplicate membership across runs returns one canonical job. Cards contain preserved
+source/fetch timestamps and status, current-version analysis status, title/company/location/region
+facts with explicit certainty, remote mode, quoted salary values and private current/stale/pending/
+failed match summaries. Historical scores have `stale=true`, including after a failed refresh;
+missing scores are null, never zero. Stored requirement failures/unavailability remain explicit.
+GET performs no model calls, matching or task enqueue, and returns no detail evidence or private facts.
+
+`limit` is 1–50 (default 20). `sort` supports `newest`, `oldest`, `title` and `match`, with UUID
+tie-breaks and unknown values last. Discovery sorting uses the first eligible owned discovery;
+match sorting ranks only current known scores. Return `next_cursor` unchanged with the same owner,
+sort, filters and limit; mismatched/malformed cursors return 422. Pages reflect live data, not a
+frozen snapshot, so changes to metadata, associations or matches can change later ordering.
+
+Filters are `run_id`, literal case-insensitive `keyword` over known title/employer/skills/location/
+region facts, exact case-insensitive `region`, `remote` (`remote`, `hybrid`, `on_site`) and
+`match_status` (`current`, `stale`, `pending`, `failed`, or `unknown` for a null score).
+`include_unknown_region`, `include_unknown_remote` and `include_unknown_salary` default to false
+when those filters apply. Search-origin and language hints never substitute for factual filters.
+Salary filters require explicit `currency` and `period` together, with optional `salary_min` and
+`salary_max`: the recorded minimum must meet the floor and the recorded maximum must meet the ceiling.
+Missing bounds remain unknown; include-unknown can retain them, but known incompatible units are
+always excluded. No currency, period, gross/net or missing-bound conversion is inferred.
+
+Listing uses one SQL statement after authentication, plus one ownership check when filtering a run;
+ownership and filters precede pagination. Existing association/revision indexes and migration
+`0031_job_listing` index owned match history and canonical alias lookup. Foreign/deleted/cancelled
+run IDs return 404; invalid filters return 422 and unavailable storage returns a safe 503.
+
 ### Provider budget ledger
 
 Approved prerequisite [#136](https://github.com/ThibaultLeveau/google_job_hunter/issues/136)

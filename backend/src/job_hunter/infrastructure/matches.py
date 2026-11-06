@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     String,
     UniqueConstraint,
     select,
@@ -68,6 +69,7 @@ class MatchIdentityRecord(Base):
             name="uq_private_match_revision",
         ),
         CheckConstraint("profile_revision >= 0", name="ck_match_profile_revision"),
+        Index("ix_match_owner_job", "owner_id", "job_id"),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True)
     owner_id: Mapped[UUID] = mapped_column(
