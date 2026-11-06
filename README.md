@@ -424,8 +424,7 @@ PostgreSQL uniqueness is per owner/kind/key. One transaction locks the owner agg
 revision and writes both facts and revision; reads hold a shared aggregate lock for a coherent snapshot.
 `source_associations` is separate read-only evidence metadata (document UUID, source version, original
 language, locator and exact quote). Manual facts return an empty list; clients cannot submit evidence
-through fact writes. Document foreign keys, source validation and persistent joins arrive in #28;
-upload, extraction, fuzzy matching and profile screens remain their owning issues.
+through fact writes. Document-backed proposal spans are now persisted; accepted source links arrive in #29.
 
 ### Private document uploads
 
@@ -463,7 +462,7 @@ Offsets are Unicode character ranges in canonical segment text joined by newline
 DOCX headers/footers and layout previews are not extracted. Source language metadata is preserved;
 TXT language stays unknown. Artifacts retain source/text hashes, document/parser versions and engine versions.
 The worker reuses existing artifacts and checks lease/version plus owner/document tombstones before
-atomically saving text and completing the task. Parsed text remains private; extraction is #28.
+atomically saving text, completing the task and enqueuing configured extraction. Parsed text stays private.
 
 ### Bounded AI boundary
 
@@ -501,6 +500,16 @@ Fixtures require an explicit response supplied to the factory; embedding fixture
 not semantic vectors. Normal tests intercept HTTP and use no credential or paid service.
 The unused LangSmith pytest plugin is disabled; one pinned dependency's Python 3.14 import deprecation
 is narrowly filtered. Other warnings remain errors, and no maintained code is excluded from coverage.
+
+Verified-owner `GET /api/v1/documents/{id}/proposals?offset=0` returns status, artifact/source version,
+language, count and 100 proposals/page. Accepted profile facts never change.
+Each field retains uncertainty, explicit nulls and exact Unicode spans/quotes validated against its window
+and preserved text. Partial tokens/unsupported values fail; source presence does not prove factual truth.
+Only exact normalized skills merge evidence; similarly named employment/projects remain separate.
+Windows use 500-character pieces/100-character overlap and about 4 KiB; excess over 64 windows,
+128 calls including repair or 512 candidates fails. One task attempt prevents nested paid retries.
+Artifacts survive redelivery; startup backfills 100 per batch. Disabled AI is unavailable. Fixture workers need
+`--profile-fixture` JSON matching `Batch`; review actions arrive in #29.
 
 ### Local PostgreSQL and migrations
 

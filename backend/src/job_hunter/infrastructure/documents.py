@@ -13,8 +13,10 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Select,
     String,
     UniqueConstraint,
+    func,
     select,
     update,
 )
@@ -23,9 +25,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from job_hunter.application.documents import Documents, PrivateStorage
+from job_hunter.application.extraction import Extracted, ExtractProfile
 from job_hunter.application.worker import RetryableTaskError
 from job_hunter.domain.documents import PARSER_VERSION, Document, ParseResult
 from job_hunter.domain.errors import DomainError
+from job_hunter.domain.extraction import Candidate, Proposal, ProposalPage
 from job_hunter.domain.tasks import NewTask, Task, TaskError, TaskKey
 from job_hunter.infrastructure.accounts import UserRecord
 from job_hunter.infrastructure.database import Base, Database
@@ -117,6 +121,8 @@ class DocumentParsing:
         storage: PrivateStorage,
         parser: Callable[[BinaryIO, str], ParseResult],
         now: Callable[[], datetime],
+        after_parse: Callable[[Session, ParsedDocumentRecord, datetime], None]
+        | None = None,
     ) -> None:
         self.database, self.storage, self.parser, self.now = (
             database,
@@ -124,6 +130,7 @@ class DocumentParsing:
             parser,
             now,
         )
+        self.after_parse = after_parse
 
     def live(self, session: Session, task: Task) -> DocumentRecord | None:
         return session.scalar(
@@ -203,19 +210,22 @@ class DocumentParsing:
             )
         else:
             row.status = "ready"
-            if self.artifact(session, task) is None:
-                session.add(
-                    ParsedDocumentRecord(
-                        id=uuid4(),
-                        document_id=row.id,
-                        document_version=row.version,
-                        parser_version=PARSER_VERSION,
-                        source_hash=row.content_hash,
-                        content_hash=result.content_hash,
-                        data=result.model_dump(mode="json"),
-                        created_at=now,
-                    )
+            artifact = self.artifact(session, task)
+            if artifact is None:
+                artifact = ParsedDocumentRecord(
+                    id=uuid4(),
+                    document_id=row.id,
+                    document_version=row.version,
+                    parser_version=PARSER_VERSION,
+                    source_hash=row.content_hash,
+                    content_hash=result.content_hash,
+                    data=result.model_dump(mode="json"),
+                    created_at=now,
                 )
+                session.add(artifact)
+                session.flush()
+            if self.after_parse is not None:
+                self.after_parse(session, artifact, now)
 
     def handlers(self) -> dict[str, Handler]:
         def execute(task: Task) -> object:
@@ -229,6 +239,263 @@ class DocumentParsing:
 
 def snapshot(row: DocumentRecord) -> Document:
     return Document.model_validate(row, from_attributes=True)
+
+
+class ExtractionRecord(Base):
+    __tablename__ = "profile_extractions"
+    __table_args__ = (
+        UniqueConstraint("parsed_id", "version_key", name="uq_extraction_version"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    parsed_id: Mapped[UUID] = mapped_column(
+        ForeignKey("parsed_documents.id", ondelete="CASCADE")
+    )
+    version_key: Mapped[str] = mapped_column(String(64))
+    accounting: Mapped[list[dict[str, object]]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ProposalRecord(Base):
+    __tablename__ = "profile_proposals"
+    __table_args__ = (
+        UniqueConstraint("extraction_id", "ordinal", name="uq_proposal_ordinal"),
+        CheckConstraint("ordinal >= 0", name="ck_proposal_ordinal"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    extraction_id: Mapped[UUID] = mapped_column(
+        ForeignKey("profile_extractions.id", ondelete="CASCADE")
+    )
+    ordinal: Mapped[int]
+    data: Mapped[dict[str, object]] = mapped_column(JSONB)
+
+
+class ProposalSourceRecord(Base):
+    __tablename__ = "proposal_sources"
+    __table_args__ = (
+        CheckConstraint('start >= 0 AND "end" > start', name="ck_proposal_span"),
+    )
+    proposal_id: Mapped[UUID] = mapped_column(
+        ForeignKey("profile_proposals.id", ondelete="CASCADE"), primary_key=True
+    )
+    field: Mapped[str] = mapped_column(String(16), primary_key=True)
+    start: Mapped[int] = mapped_column(primary_key=True)
+    end: Mapped[int] = mapped_column(primary_key=True)
+    locator: Mapped[str] = mapped_column(String(32))
+    quote: Mapped[str] = mapped_column(String(4000))
+
+
+class PostgresExtraction:
+    def __init__(
+        self,
+        database: Database,
+        stage: ExtractProfile,
+        now: Callable[[], datetime],
+        enabled: bool = True,
+    ) -> None:
+        self.database, self.stage = database, stage
+        self.now, self.enabled = now, enabled
+
+    @staticmethod
+    def current() -> Select[ParsedDocumentRecord]:
+        return (
+            select(ParsedDocumentRecord)
+            .join(DocumentRecord)
+            .join(UserRecord)
+            .where(
+                ParsedDocumentRecord.parser_version == PARSER_VERSION,
+                ParsedDocumentRecord.document_version == DocumentRecord.version,
+                ParsedDocumentRecord.source_hash == DocumentRecord.content_hash,
+                DocumentRecord.deleted_at.is_(None),
+                UserRecord.deleted_at.is_(None),
+            )
+        )
+
+    def live(self, session: Session, parsed_id: UUID) -> ParsedDocumentRecord | None:
+        return session.scalar(
+            self.current().where(ParsedDocumentRecord.id == parsed_id).with_for_update()
+        )
+
+    def artifact(self, session: Session, parsed_id: UUID) -> ExtractionRecord | None:
+        return session.scalar(
+            select(ExtractionRecord).where(
+                ExtractionRecord.parsed_id == parsed_id,
+                ExtractionRecord.version_key == self.stage.version,
+            )
+        )
+
+    def enqueue(
+        self, session: Session, parsed: ParsedDocumentRecord, now: datetime
+    ) -> None:
+        if self.enabled:
+            key = TaskKey(self.stage.kind, parsed.id, 1)
+            PostgresTaskQueue(session).enqueue(
+                NewTask(key, parsed.id, now, max_attempts=1), now
+            )
+
+    def backfill(self, limit: int = 100) -> int:
+        if not self.enabled:
+            return 0
+        with self.database.transaction() as session:
+            rows = list(
+                session.scalars(
+                    self.current()
+                    .where(
+                        ~select(TaskRecord.id)
+                        .where(
+                            TaskRecord.kind == self.stage.kind,
+                            TaskRecord.payload_ref == ParsedDocumentRecord.id,
+                        )
+                        .exists(),
+                    )
+                    .order_by(ParsedDocumentRecord.created_at, ParsedDocumentRecord.id)
+                    .limit(max(1, min(limit, 100)))
+                    .with_for_update(skip_locked=True, of=ParsedDocumentRecord)
+                )
+            )
+            for parsed in rows:
+                self.enqueue(session, parsed, self.now())
+            return len(rows)
+
+    def execute(self, task: Task) -> Extracted | None:
+        with self.database.transaction() as session:
+            current = session.scalar(
+                select(TaskRecord)
+                .where(
+                    TaskRecord.id == task.id,
+                    TaskRecord.status == "running",
+                    TaskRecord.generation == task.generation,
+                    TaskRecord.lease_token == task.lease_token,
+                    TaskRecord.lease_expires_at > self.now(),
+                )
+                .with_for_update()
+            )
+            parsed = self.live(session, task.payload_ref)
+            if (
+                current is None
+                or parsed is None
+                or self.artifact(session, parsed.id) is not None
+            ):
+                return None
+            source = ParseResult.model_validate(parsed.data)
+            if source.content_hash != parsed.content_hash:
+                raise ValueError("Invalid source version.")
+        return self.stage.execute(source)
+
+    def publish(
+        self, session: Session, task: Task, result: object, now: datetime
+    ) -> None:
+        parsed = self.live(session, task.payload_ref)
+        if (
+            not isinstance(result, Extracted)
+            or parsed is None
+            or result.content_hash != parsed.content_hash
+            or self.artifact(session, parsed.id) is not None
+        ):
+            return
+        artifact = ExtractionRecord(
+            id=uuid4(),
+            parsed_id=parsed.id,
+            version_key=self.stage.version,
+            accounting=result.accounting,
+            created_at=now,
+        )
+        session.add(artifact)
+        session.flush()
+        for index, candidate in enumerate(result.candidates):
+            row = ProposalRecord(
+                id=uuid4(),
+                extraction_id=artifact.id,
+                ordinal=index,
+                data=candidate.model_dump(mode="json"),
+            )
+            session.add(row)
+            session.flush()
+            spans = {
+                (field.name, span.start, span.end): span
+                for field in candidate.fields
+                for span in field.evidence
+            }
+            session.add_all(
+                ProposalSourceRecord(
+                    proposal_id=row.id, field=field, **span.model_dump()
+                )
+                for (field, _, _), span in spans.items()
+            )
+
+    def handlers(self) -> dict[str, Handler]:
+        if not self.enabled:
+            return {}
+        return {self.stage.kind: Handler(self.execute, self.publish)}
+
+    def read(self, owner: UUID, document: UUID, offset: int) -> ProposalPage:
+        with self.database.transaction() as session:
+            row = session.scalar(
+                select(DocumentRecord)
+                .join(UserRecord)
+                .where(
+                    DocumentRecord.id == document,
+                    DocumentRecord.owner_id == owner,
+                    DocumentRecord.deleted_at.is_(None),
+                    UserRecord.deleted_at.is_(None),
+                )
+                .with_for_update(read=True)
+            )
+            if row is None:
+                raise DomainError("not_found")
+            parsed = session.scalar(self.current().where(DocumentRecord.id == row.id))
+            if parsed is None:
+                return ProposalPage(
+                    status="failed"
+                    if row.status in {"failed", "unsupported"}
+                    else "waiting_for_parse",
+                    source_version=row.version,
+                )
+            artifact = self.artifact(session, parsed.id)
+            language = ParseResult.model_validate(parsed.data).language
+            if artifact is None:
+                state = session.scalar(
+                    select(TaskRecord.status).where(
+                        TaskRecord.kind == self.stage.kind,
+                        TaskRecord.payload_ref == parsed.id,
+                    )
+                )
+                return ProposalPage(
+                    status="unavailable"
+                    if not self.enabled
+                    else "running"
+                    if state == "running"
+                    else "failed"
+                    if state in {"failed", "succeeded"}
+                    else "pending",
+                    source_version=row.version,
+                    language=language,
+                )
+            count = session.scalar(
+                select(func.count())
+                .select_from(ProposalRecord)
+                .where(ProposalRecord.extraction_id == artifact.id)
+            )
+            rows = session.scalars(
+                select(ProposalRecord)
+                .where(ProposalRecord.extraction_id == artifact.id)
+                .order_by(ProposalRecord.ordinal)
+                .offset(offset)
+                .limit(100)
+            )
+            return ProposalPage(
+                status="ready",
+                artifact_id=artifact.id,
+                source_version=row.version,
+                language=language,
+                count=count or 0,
+                items=[
+                    Proposal(
+                        id=proposal.id,
+                        candidate=Candidate.model_validate(proposal.data),
+                    )
+                    for proposal in rows
+                ],
+            )
 
 
 class PostgresDocuments(Documents):

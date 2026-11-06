@@ -27,6 +27,7 @@ from job_hunter.api.sessions import router as sessions_router
 from job_hunter.application.accounts import RegisterAccount, VerifyEmail
 from job_hunter.application.auth_limits import AuthLimits
 from job_hunter.application.documents import DocumentUploads
+from job_hunter.application.extraction import ExtractProfile
 from job_hunter.application.oidc import ConsentCancelled, GoogleSignIn, LinkingRequired
 from job_hunter.application.reauth import Reauthentication
 from job_hunter.application.recovery import PasswordRecovery
@@ -38,11 +39,12 @@ from job_hunter.infrastructure.accounts import (
     PostgresAuthCounter,
     PostgresSessions,
 )
-from job_hunter.infrastructure.ai import load_ai_settings
+from job_hunter.infrastructure.ai import create_ai, load_ai_settings
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.documents import (
     LocalStorage,
     PostgresDocuments,
+    PostgresExtraction,
     load_storage_settings,
 )
 from job_hunter.infrastructure.oidc import (
@@ -91,7 +93,7 @@ class ResetPasswordRequest(VerificationRequest):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings if settings is not None else load_settings()
-    load_ai_settings()
+    ai_config = load_ai_settings()
     database = Database(config) if config.database_url is not None else None
 
     @asynccontextmanager
@@ -129,6 +131,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.profiles = (
         PostgresProfiles(database, lambda: datetime.now(UTC))
+        if database is not None
+        else None
+    )
+    app.state.proposals = (
+        PostgresExtraction(
+            database,
+            ExtractProfile(
+                lambda accounting: create_ai(ai_config, accounting),
+                ai_config.model_dump_json(
+                    exclude={"api_key", "environment", "embedding_model", "limits"}
+                ),
+            ),
+            lambda: datetime.now(UTC),
+            ai_config.provider != "disabled",
+        )
         if database is not None
         else None
     )
