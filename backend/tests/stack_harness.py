@@ -19,7 +19,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 import httpx
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
-from sqlalchemy import create_engine, select, text, update
+from sqlalchemy import create_engine, func, select, text, update
 from stack_fixtures import EMAILS, PASSWORD, Scenario, StackConfig, write_private
 from test_extraction import TEXT
 
@@ -36,7 +36,9 @@ from job_hunter.infrastructure.documents import (
     ParsedDocumentRecord,
     ProposalRecord,
 )
-from job_hunter.infrastructure.profiles import ProfileFactRecord
+from job_hunter.infrastructure.matches import MatchArtifactRecord, MatchIdentityRecord
+from job_hunter.infrastructure.profiles import ProfileFactRecord, ProfileRecord
+from job_hunter.infrastructure.tasks import TaskRecord
 from job_hunter.settings import Settings
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -173,11 +175,11 @@ class Stack:
             ],
         }
 
-    def launch(self) -> None:
+    def launch(self, roles: tuple[str, ...] = ("api", "worker")) -> None:
         path = self.root / "config.json"
         write_private(path, self.config.model_dump(mode="json"))
         (self.root / "worker-ready.json").unlink(missing_ok=True)
-        for role in ("api", "worker"):
+        for role in roles:
             descriptor = self.listener.fileno()
             args = [sys.executable, str(FIXTURES), str(path), role]
             if role == "api":
@@ -215,8 +217,25 @@ class Stack:
     def browser_control(self, action: str, owner: UUID | None) -> dict[str, object]:
         if action == "resume":
             return {"text": TEXT}
+        if action == "pause-worker":
+            if len(self.children) == 2:
+                child = self.children.pop()
+                child.terminate()
+                try:
+                    child.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=5)
+            return {"paused": True}
+        if action == "resume-worker":
+            if len(self.children) == 1:
+                self.launch(("worker",))
+            return {"paused": False}
         if owner not in {uuid5(NAMESPACE_URL, email) for email in EMAILS}:
             raise ValueError("Select a seeded synthetic owner")
+        if action == "jobs":
+            assert owner is not None
+            return self.job_artifacts(owner)
         with self.db.transaction() as session:
             if action == "expire":
                 now = datetime.now(UTC)
@@ -264,6 +283,75 @@ class Stack:
                 (self.root / "documents" / (key + ".blob")).is_file() for key in keys
             )
             return result
+
+    def job_artifacts(self, owner: UUID) -> dict[str, object]:
+        public_columns = {
+            "job_sources": ("id", "canonical_version"),
+            "job_snapshots": ("id", "version"),
+            "job_preparations": ("id", "version"),
+            "job_cleanings": ("id", "version"),
+            "job_metadata": ("id", "version"),
+            "job_requirements": ("id", "version"),
+            "job_chunks": ("id", "policy_version"),
+            "job_embeddings": ("chunk_id", "space_id"),
+            "job_embedding_spaces": ("id", "model", "revision"),
+        }
+        with self.db.transaction() as session:
+            public = {}
+            for name, columns in public_columns.items():
+                table = Base.metadata.tables[name]
+                public[name] = [
+                    {key: str(value) for key, value in row.items()}
+                    for row in session.execute(
+                        select(*(table.c[column] for column in columns)).order_by(
+                            *(table.c[column] for column in columns)
+                        )
+                    ).mappings()
+                ]
+            tasks = session.scalars(
+                select(TaskRecord)
+                .where(TaskRecord.kind.startswith("job_", autoescape=True))
+                .order_by(TaskRecord.kind)
+            )
+            profile = session.get(ProfileRecord, owner)
+            revision = profile.revision if profile else 0
+            matches = session.execute(
+                select(MatchIdentityRecord, func.max(MatchArtifactRecord.generation))
+                .join(MatchArtifactRecord)
+                .where(
+                    MatchIdentityRecord.owner_id == owner,
+                    MatchIdentityRecord.profile_revision == revision,
+                )
+                .group_by(MatchIdentityRecord.id)
+                .order_by(MatchIdentityRecord.id)
+            )
+            return {
+                "public": public,
+                "tasks": [
+                    {
+                        "id": str(task.id),
+                        "key": f"{task.kind}:{task.subject_id}:{task.subject_version}",
+                        "kind": task.kind,
+                        "status": task.status,
+                        "attempts": task.attempts,
+                    }
+                    for task in tasks
+                ],
+                "profile_revision": revision,
+                "matches": [
+                    {
+                        "id": str(identity.id),
+                        "job_id": str(identity.job_id),
+                        "generation": generation,
+                        "profile_revision": identity.profile_revision,
+                        "requirements_id": str(identity.requirements_id),
+                        "content_id": str(identity.content_id),
+                        "chunk_version": identity.chunk_version,
+                        "evaluator_version": identity.evaluator_version,
+                    }
+                    for identity, generation in matches
+                ],
+            }
 
     def halt(self) -> None:
         for child in self.children:
@@ -389,6 +477,9 @@ def main() -> None:
             "resume",
             "expire",
             "dedup",
+            "jobs",
+            "pause-worker",
+            "resume-worker",
         ),
     )
     parser.add_argument("--mode", choices=("test",), default=None)
@@ -448,7 +539,17 @@ def main() -> None:
                             write_private(stack.root / "replies" / request.name, result)
             finally:
                 args.state.unlink(missing_ok=True)
-        elif args.action in ("seed", "reset", "stop", "resume", "expire", "dedup"):
+        elif args.action in (
+            "seed",
+            "reset",
+            "stop",
+            "resume",
+            "expire",
+            "dedup",
+            "jobs",
+            "pause-worker",
+            "resume-worker",
+        ):
             print(
                 json.dumps(control(args.state, args.action, args.scenario, args.owner))
             )

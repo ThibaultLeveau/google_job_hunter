@@ -239,6 +239,7 @@ def test_cli_lifecycle(tmp_path: Path) -> None:
         for action, identity in (
             ("expire", uuid4()),
             ("dedup", None),
+            ("jobs", uuid4()),
             ("unknown", owner),
         ):
             with pytest.raises(RuntimeError, match="control failed"):
@@ -257,6 +258,12 @@ def test_cli_lifecycle(tmp_path: Path) -> None:
         ):
             login(alice)
             login(bob, "bob@example.org")
+            assert control(state, "pause-worker", "success") == {"paused": True}
+            assert alice.get("/api/health/ready").status_code == 200
+            empty = control(state, "jobs", "success", owner)
+            assert all(not rows for rows in empty["public"].values())
+            assert empty["tasks"] == empty["matches"] == []
+            assert control(state, "resume-worker", "success") == {"paused": False}
             assert control(state, "expire", "success", owner) == {"expired": True}
             assert alice.get("/api/auth/me").status_code == 401
             assert bob.get("/api/auth/me").status_code == 200

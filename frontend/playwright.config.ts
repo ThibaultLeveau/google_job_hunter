@@ -14,7 +14,7 @@ export default defineConfig({
   retries: 0,
   forbidOnly: Boolean(process.env.CI),
   timeout: 90000,
-  globalTimeout: 240000,
+  globalTimeout: 600000,
   expect: { timeout: 10000 },
   outputDir: 'reports/browser/results',
   reporter: [['list'], ['html', { outputFolder: 'reports/browser/html', open: 'never' }], ['junit', { outputFile: 'reports/browser/junit.xml' }]],

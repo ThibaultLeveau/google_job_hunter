@@ -28,8 +28,8 @@ from job_hunter.application.search_provider import (
     SearchRequest,
 )
 from job_hunter.application.worker import Worker
-from job_hunter.domain.searches import SearchDefinition, query_text
-from job_hunter.infrastructure import ai, pipeline
+from job_hunter.domain.searches import SearchDefinition, compile_search
+from job_hunter.infrastructure import ai, match_scheduling, pipeline
 from job_hunter.infrastructure.fetching import HttpFetcher
 from job_hunter.infrastructure.oidc import (
     ENDPOINTS,
@@ -44,6 +44,12 @@ JOB_URL = "https://jobs.example.org/fixture-job"
 JOB_TEXT = "Python engineer\n\nSynthetic Company\n\nRemote\n\nPython required"
 PASSWORD = "Synthetic-only passphrase 2026!"
 EMAILS = ("alice@example.org", "bob@example.org")
+SEARCH = SearchDefinition(
+    groups=[["Python", "Go"], ["remote"]],
+    country="fr",
+    language="en",
+    sites=["jobs.example.org"],
+)
 
 
 class StackConfig(BaseModel):
@@ -114,11 +120,15 @@ class SearchFixture(Provider):
         )
 
     def fetch(self, request: SearchRequest) -> SearchPage:
-        if (
-            request.query != query_text(SearchDefinition(groups=[["Python"]]))
-            or request.parameters
-            or request.page not in (0, 1)
-        ):
+        configured = (
+            compile_search(value, ("jobs.example.org",))
+            for value in (SearchDefinition(groups=[["Python"]]), SEARCH)
+        )
+        if not any(
+            request.query == value.query
+            and request.parameters == value.provider_parameters
+            for value in configured
+        ) or request.page not in (0, 1):
             raise AssertionError("Unconfigured synthetic search")
         return super().fetch(request)
 
@@ -184,7 +194,88 @@ class ChatFixture(pipeline.JobFixture):
         ):
             raise AssertionError("Unconfigured synthetic job schema")
         check_source(source, JOB_TEXT)
+        parts = json.loads(json.loads(source)["untrusted_source"])
+        if isinstance(parts, dict):
+            parts = parts["source"]
+
+        def citation(quote: str) -> dict[str, object]:
+            part = next(part for part in parts if quote in part["text"])
+            start = part["start"] + part["text"].index(quote)
+            return {
+                "paragraph_id": part["id"],
+                "start": start,
+                "end": start + len(quote),
+                "quote": quote,
+            }
+
+        if "selection" in schema["properties"]:
+            return Reply(
+                {
+                    "selection": {
+                        "kind": "job",
+                        "evidence": [citation("Python engineer")],
+                        "salaries": [],
+                        "facts": [
+                            {
+                                "field": field,
+                                "value": value,
+                                "uncertain": False,
+                                "evidence": citation(value),
+                            }
+                            for field, value in (
+                                ("title", "Python engineer"),
+                                ("employer", "Synthetic Company"),
+                                ("work_arrangement", "Remote"),
+                            )
+                        ],
+                    }
+                },
+                0,
+                0,
+            )
+        if "items" in schema["properties"]:
+            return Reply(
+                {
+                    "items": [
+                        {
+                            "kind": "job_requirement",
+                            "level": "required",
+                            "text": "Python required",
+                            "evidence": [citation("Python required")],
+                        }
+                    ]
+                },
+                0,
+                0,
+            )
         return await super().generate(prompt, source, schema)
+
+
+class MatchFixture(match_scheduling.UnknownMatch):
+    async def generate(self, prompt: str, source: str, schema: dict[str, Any]) -> Reply:
+        data = json.loads(json.loads(source)["untrusted_source"])
+        facts = data["profile_facts"]
+        if any(
+            fact.get("kind") != "skill" or fact.get("skill") not in ("Python", "Go")
+            for fact in facts
+        ):
+            raise AssertionError("Unconfigured synthetic profile match")
+        supported = [fact["id"] for fact in facts if fact["skill"] == "Python"]
+        result = await super().generate(prompt, source, schema)
+        assert isinstance(result.data, dict)
+        for row, requirement in zip(
+            result.data["items"], data["requirements"], strict=True
+        ):
+            if requirement["text"] != "Python required":
+                raise AssertionError("Unconfigured synthetic requirement")
+            row.update(
+                status="matched" if supported else "missing",
+                profile_evidence=supported,
+                rationale="An accepted Python skill supports the explicit requirement."
+                if supported
+                else "No accepted Python skill is present; this is an evidence gap.",
+            )
+        return result
 
 
 class ProfileAndEmbeddingFixture(ai.FixtureProvider):
@@ -196,7 +287,22 @@ class ProfileAndEmbeddingFixture(ai.FixtureProvider):
 
     async def embed(self, texts: tuple[str, ...]) -> Reply:
         if texts != (JOB_TEXT,):
-            raise AssertionError("Unconfigured synthetic embeddings")
+            try:
+                facts = json.loads(texts[0]) if len(texts) == 1 else None
+                if (
+                    not isinstance(facts, list)
+                    or not facts
+                    or len(facts) > 2
+                    or any(
+                        not isinstance(fact, dict)
+                        or fact.get("kind") != "skill"
+                        or fact.get("skill") not in ("Python", "Go")
+                        for fact in facts
+                    )
+                ):
+                    raise ValueError()
+            except ValueError, IndexError:
+                raise AssertionError("Unconfigured synthetic embeddings") from None
         return await super().embed(texts)
 
 
@@ -254,6 +360,7 @@ def serve(config: StackConfig, role: str, descriptor: int | None = None) -> None
     with (
         patch.object(ai, "FixtureProvider", ProfileAndEmbeddingFixture),
         patch.object(pipeline, "JobFixture", ChatFixture),
+        patch.object(match_scheduling, "UnknownMatch", MatchFixture),
         patch.object(worker, "create_search_provider", lambda _: search),
         patch.object(
             worker,
