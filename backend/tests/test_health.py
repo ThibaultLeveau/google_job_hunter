@@ -103,6 +103,7 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
     assert first.openapi() == second.openapi()
     assert list(first.openapi()["paths"]) == [
         "/api/v1/searches/preview",
+        "/api/v1/searches/provider",
         "/api/v1/searches",
         "/api/v1/searches/runs",
         "/api/v1/searches/runs/{run_id}",
