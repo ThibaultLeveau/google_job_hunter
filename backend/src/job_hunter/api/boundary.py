@@ -12,12 +12,15 @@ from job_hunter.settings import Settings
 
 logger = logging.getLogger(__name__)
 METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-HEADERS = {"content-type", "x-request-id", "x-csrf-token"}
+HEADERS = {"content-type", "x-request-id", "x-csrf-token", "x-document-name"}
 
 
 class RequestBoundary:
-    def __init__(self, app: ASGIApp, settings: Settings) -> None:
+    def __init__(
+        self, app: ASGIApp, settings: Settings, upload_max_bytes: int = 10485760
+    ) -> None:
         self.app, self.settings = app, settings
+        self.upload_max_bytes = upload_max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -107,6 +110,9 @@ class RequestBoundary:
             )(scope, receive, safe_send)
             return
         max_bytes = self.settings.request_max_bytes
+        streaming = scope["method"] == "POST" and scope["path"] == "/api/v1/documents"
+        if streaming:
+            max_bytes = self.upload_max_bytes
         if scope["path"].startswith("/api/auth/"):
             max_bytes = min(max_bytes, 8192)
         lengths = headers.getlist("content-length")
@@ -115,6 +121,14 @@ class RequestBoundary:
             return
         if lengths and (len(lengths[0]) > 16 or int(lengths[0]) > max_bytes):
             await reject(413)
+            return
+        if streaming:
+            try:
+                await self.app(scope, receive, safe_send)
+            except Exception:
+                logger.error("request_failed request_id=%s", request_id)
+                if not started:
+                    await reject(500)
             return
         body = bytearray()
         try:

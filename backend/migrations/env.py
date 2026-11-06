@@ -2,6 +2,7 @@ from alembic import context
 
 from job_hunter.infrastructure import (
     accounts,  # noqa: F401 -- register account tables
+    documents,  # noqa: F401 -- register document tables
     profiles,  # noqa: F401 -- register profile tables
 )
 from job_hunter.infrastructure.database import Database
