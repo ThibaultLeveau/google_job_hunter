@@ -151,7 +151,7 @@ test('supports keyboard detail links with list context and restores cached posit
   expect(api.queryClient.getQueryData(['jobs-position', owner.id, '?cursor=saved'])).toBe(480);
   act(() => { window.history.back(); });
   await screen.findByRole('link', { name: 'Senior software engineer' });
-  expect(scroll).toHaveBeenCalledWith({ top: 480, behavior: 'instant' });
+  await waitFor(() => { expect(scroll).toHaveBeenCalledWith({ top: 480, behavior: 'instant' }); });
   await user.click(button('Previous page')); expect(window.location.search).toBe('');
 });
 
