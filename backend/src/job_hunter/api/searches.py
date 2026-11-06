@@ -16,7 +16,13 @@ from job_hunter.application.searches import (
     SearchWrite,
 )
 from job_hunter.domain.accounts import SessionUser
-from job_hunter.domain.searches import SearchDefinition, SearchPreview, compile_search
+from job_hunter.domain.searches import (
+    COUNTRIES,
+    LANGUAGES,
+    SearchDefinition,
+    SearchPreview,
+    compile_search,
+)
 
 router = APIRouter(prefix="/api/v1/searches", tags=["searches"])
 Owner = Annotated[SessionUser, Depends(authenticated_user)]
@@ -31,6 +37,12 @@ class SearchEdit(SearchWrite):
 class RunStart(SearchValue):
     expected_revision: int = Field(ge=1)
     idempotency_key: Annotated[UUID, Field(strict=False)]
+
+
+class SearchHintOptions(SearchValue):
+    allowed_domains: tuple[str, ...]
+    language_codes: tuple[str, ...]
+    country_codes: tuple[str, ...]
 
 
 def searches(request: Request) -> Searches:
@@ -59,6 +71,15 @@ def preview_search(
 @router.get("/provider")
 def provider_status(request: Request, owner: Owner) -> SearchCapability:
     return cast(SearchProvider, request.app.state.search_provider).capability
+
+
+@router.get("/hints")
+def hint_options(request: Request, owner: Owner) -> SearchHintOptions:
+    return SearchHintOptions(
+        allowed_domains=cast(tuple[str, ...], request.app.state.search_allowed_domains),
+        language_codes=tuple(sorted(LANGUAGES)),
+        country_codes=tuple(sorted(COUNTRIES)),
+    )
 
 
 @router.get("")

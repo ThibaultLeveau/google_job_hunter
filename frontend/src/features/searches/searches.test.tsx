@@ -2,7 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { components } from '../../../generated/api';
 import App from '../../App';
 import { api, sessionKey, type Session } from '../../shared/api';
@@ -23,16 +23,19 @@ function mount() {
 }
 const button = (name: string) => screen.getByRole('button', { name });
 const field = (name: string) => screen.getByRole('textbox', { name });
+async function save(user: ReturnType<typeof userEvent.setup>) { await waitFor(() => { expect(button('Save search')).toBeEnabled(); }); await user.click(button('Save search')); }
 async function edit() { const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Edit Engineering' })); return user; }
 beforeEach(() => {
   api.clearSession(); api.queryClient.clear(); current = owner; items = [];
-  api.queryClient.setQueryDefaults(sessionKey, { retry: false }); api.queryClient.setQueryDefaults(['searches'], { retry: false });
+  api.queryClient.setQueryDefaults(sessionKey, { retry: false }); api.queryClient.setQueryDefaults(['searches'], { retry: false }); api.queryClient.setQueryDefaults(['search-hints'], { retry: false });
   server.use(http.get('http://localhost/api/auth/me', () => current ? HttpResponse.json(current) : failure(401)),
     http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })),
     http.get(path, () => HttpResponse.json({ items, next_offset: null })),
+    http.get(path + '/hints', () => HttpResponse.json({ allowed_domains: ['linkedin.com', 'a.org', 'b.org', 'c.org', 'd.org'], language_codes: ['en', 'fr'], country_codes: ['fr', 'gb', 'us'] })),
+    http.post(path + '/preview', () => HttpResponse.json({ query: 'Server-rendered query', provider_parameters: {}, hints: [] })),
     http.get(path + '/:id', ({ params }) => { const value = items.find(item => item.id === params.id); return value ? HttpResponse.json(value) : failure(404); }));
 });
-afterEach(() => { api.clearSession(); api.queryClient.clear(); });
+afterEach(() => { vi.useRealTimers(); api.clearSession(); api.queryClient.clear(); });
 
 test('shows loading and empty states, with keyboard entry, labels and focus recovery', async () => {
   const deferred = gate(); server.use(http.get(path, async () => { await deferred.pending; return HttpResponse.json({ items, next_offset: null }); }));
@@ -41,7 +44,7 @@ test('shows loading and empty states, with keyboard entry, labels and focus reco
   button('New search').focus(); await user.keyboard('{Enter}'); expect(field('Search name')).toHaveFocus();
   await user.tab(); expect(field('Group 1 term 1')).toHaveFocus();
   expect(button('Remove term 1 from group 1')).toBeDisabled(); expect(button('Remove group 1')).toBeDisabled();
-  expect(screen.getByText(/separate from filters on verified job details/)).toBeVisible();
+  expect(screen.getByText(/^Organize words and phrases/)).toBeVisible();
   await user.click(button('Cancel editing')); expect(button('New search')).toHaveFocus();
 });
 
@@ -50,7 +53,7 @@ test('creates AND-of-OR phrases and exclusions, round trips duplicates, updates 
   server.use(http.post(path, async ({ request }) => {
     writes++; expect(request.headers.get('x-csrf-token')).toBe(owner.csrf_token);
     const body = await request.json() as components['schemas']['SearchWrite'];
-    expect(body).toEqual({ name: 'Backend roles', definition: { groups: [[' Ｐｙｔｈｏｎ ', 'Python', 'software engineer'], ['remote']], exclusions: ['intern'] } });
+    expect(body).toEqual({ name: 'Backend roles', definition: { groups: [[' Ｐｙｔｈｏｎ ', 'Python', 'software engineer'], ['remote']], exclusions: ['intern'], recency_days: null } });
     items = [{ ...search(), ...body, definition: { ...body.definition, groups: [['Python', 'Python', 'software engineer'], ['remote']] } }];
     return HttpResponse.json(items[0], { status: 201 });
   }), http.put(path + '/:id', async ({ request, params }) => {
@@ -70,10 +73,10 @@ test('creates AND-of-OR phrases and exclusions, round trips duplicates, updates 
   await user.click(button('Add exclusion')); expect(field('Exclusion 1')).toHaveFocus(); await user.keyboard('intern');
   expect(screen.getByLabelText('Search logic')).toHaveTextContent('Python OR software engineer');
   expect(screen.getByLabelText('Search logic')).toHaveTextContent('ANDMatch any of: remote');
-  await user.click(button('Save search')); expect(await screen.findByText('Saved “Backend roles”.')).toBeVisible();
+  await save(user); expect(await screen.findByText('Saved “Backend roles”.')).toBeVisible();
   view.unmount(); mount(); await user.click(await screen.findByRole('button', { name: 'Edit Backend roles' }));
   expect(field('Group 1 term 1')).toHaveValue('Python'); expect(field('Group 1 term 2')).toHaveValue('Python'); expect(field('Exclusion 1')).toHaveValue('intern');
-  await user.clear(field('Search name')); await user.type(field('Search name'), 'Senior roles'); await user.click(button('Save search'));
+  await user.clear(field('Search name')); await user.type(field('Search name'), 'Senior roles'); await save(user);
   expect(await screen.findByText('Saved “Senior roles”.')).toBeVisible(); await user.click(button('Delete Senior roles'));
   expect(button('Keep search')).toHaveFocus(); await user.click(button('Keep search')); expect(button('Delete Senior roles')).toHaveFocus();
   await user.click(button('Delete Senior roles')); await user.click(button('Confirm deletion'));
@@ -98,14 +101,14 @@ test.each(['groups', 'terms', 'total', 'exclusions'] as const)('bounds %s and re
 
 test('associates empty, excessive and Unicode-normalized length errors and maintains remove focus', async () => {
   const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'New search' }));
-  await user.click(button('Save search')); expect(field('Search name')).toHaveFocus(); expect(field('Search name')).toHaveAccessibleDescription(/1–120 characters/);
+  await save(user); expect(field('Search name')).toHaveFocus(); expect(field('Search name')).toHaveAccessibleDescription(/1–120 characters/);
   expect(field('Group 1 term 1')).toHaveAttribute('aria-invalid', 'true');
-  fireEvent.change(field('Search name'), { target: { value: 'x'.repeat(121) } }); await user.click(button('Save search')); expect(field('Search name')).toHaveFocus();
+  fireEvent.change(field('Search name'), { target: { value: 'x'.repeat(121) } }); await save(user); expect(field('Search name')).toHaveFocus();
   await user.clear(field('Search name')); await user.type(field('Search name'), 'Valid');
-  fireEvent.change(field('Group 1 term 1'), { target: { value: 'x'.repeat(81) } }); await user.click(button('Save search')); expect(field('Group 1 term 1')).toHaveFocus();
-  fireEvent.change(field('Group 1 term 1'), { target: { value: 'ﬃ'.repeat(27) } }); await user.click(button('Save search')); expect(field('Group 1 term 1')).toHaveAccessibleDescription(/1–80 characters/);
+  fireEvent.change(field('Group 1 term 1'), { target: { value: 'x'.repeat(81) } }); await save(user); expect(field('Group 1 term 1')).toHaveFocus();
+  fireEvent.change(field('Group 1 term 1'), { target: { value: 'ﬃ'.repeat(27) } }); await save(user); expect(field('Group 1 term 1')).toHaveAccessibleDescription(/1–80 characters/);
   await user.clear(field('Group 1 term 1')); await user.type(field('Group 1 term 1'), 'Python');
-  await user.click(button('Add exclusion')); await user.click(button('Save search')); expect(field('Exclusion 1')).toHaveFocus();
+  await user.click(button('Add exclusion')); await save(user); expect(field('Exclusion 1')).toHaveFocus();
   await user.click(button('Remove exclusion 1')); expect(button('Add exclusion')).toHaveFocus();
   await user.click(button('Add OR term to group 1')); await user.click(button('Remove term 1 from group 1')); expect(field('Group 1 term 1')).toHaveFocus();
   await user.click(button('Add AND group')); await user.click(button('Remove group 2')); expect(field('Group 1 term 1')).toHaveFocus();
@@ -114,38 +117,38 @@ test('associates empty, excessive and Unicode-normalized length errors and maint
 test('corrects a safe validation error and prevents duplicate submission while pending', async () => {
   items = [search()]; const deferred = gate(); let writes = 0;
   server.use(http.put(path + '/:id', async () => { writes++; if (writes === 1) return failure(422); await deferred.pending; return HttpResponse.json(items[0]); }));
-  const user = await edit(); await user.type(field('Group 1 term 1'), ':invalid'); await user.click(button('Save search'));
+  const user = await edit(); await user.type(field('Group 1 term 1'), ':invalid'); await save(user);
   expect(await screen.findByText(/Some values were rejected/)).toBeVisible(); expect(screen.queryByText('Private server message')).not.toBeInTheDocument();
   expect(field('Group 1 term 1')).toHaveValue('Python:invalid'); expect(button('Save search')).toBeEnabled();
-  await user.clear(field('Group 1 term 1')); await user.type(field('Group 1 term 1'), 'Rust'); await user.click(button('Save search'));
+  await user.clear(field('Group 1 term 1')); await user.type(field('Group 1 term 1'), 'Rust'); await save(user);
   expect(await screen.findByRole('button', { name: 'Saving search…' })).toBeDisabled(); expect(field('Search name')).toBeDisabled(); expect(button('Cancel editing')).toBeDisabled();
   const form = field('Search name').closest('form'); if (!form) throw new Error('Missing form'); fireEvent.submit(form); expect(writes).toBe(2);
   deferred.release(); expect(await screen.findByText('Saved “Engineering”.')).toBeVisible();
 });
 
-test('reloads a stale revision without losing any draft fields or latest discovery hints', async () => {
+test('reloads a stale revision without losing any draft fields or discovery hints', async () => {
   items = [search({ groups: [['Python']], sites: ['linkedin.com'], language: 'fr', country: 'fr', location: 'Paris', recency_days: 7 })];
   let writes = 0, reads = 0;
   server.use(http.put(path + '/:id', async ({ request }) => {
     writes++; const body = await request.json();
     if (writes === 1) { items = [{ ...items[0] as SavedSearch, name: 'Elsewhere', revision: 8, definition: { ...items[0]?.definition, groups: [['Go']], country: 'gb' } }]; return failure(409); }
-    expect(body).toEqual({ name: 'My draft', expected_revision: 8, definition: { ...items[0]?.definition, groups: [['Python', 'Rust'], ['remote']], exclusions: ['intern'] } });
+    expect(body).toEqual({ name: 'My draft', expected_revision: 8, definition: { ...items[0]?.definition, country: 'fr', groups: [['Python', 'Rust'], ['remote']], exclusions: ['intern'] } });
     return HttpResponse.json({ ...items[0], name: 'My draft', revision: 9 });
-  }), http.get(path + '/:id', () => { reads++; return reads === 1 ? failure(503) : HttpResponse.json(items[0]); }));
+  }), http.get(path + '/' + String(items[0]?.id), () => { reads++; return reads === 1 ? failure(503) : HttpResponse.json(items[0]); }));
   const user = await edit(); await user.clear(field('Search name')); await user.type(field('Search name'), 'My draft');
   await user.click(button('Add OR term to group 1')); await user.keyboard('Rust'); await user.click(button('Add AND group')); await user.keyboard('remote');
-  await user.click(button('Add exclusion')); await user.keyboard('intern'); await user.click(button('Save search'));
+  await user.click(button('Add exclusion')); await user.keyboard('intern'); await save(user);
   expect(await screen.findByText(/The save could not be confirmed/)).toBeVisible(); expect(button('Save search')).toBeDisabled();
   await user.click(button('Reload saved searches')); expect(await screen.findByText(/The latest search could not be loaded/)).toBeVisible();
   expect(button('Save search')).toBeDisabled(); await user.click(button('Reload saved searches'));
   expect(await screen.findByText('Latest saved version: Elsewhere')).toBeVisible(); expect(field('Search name')).toHaveValue('My draft');
   expect(field('Group 1 term 2')).toHaveValue('Rust'); expect(field('Group 2 term 1')).toHaveValue('remote'); expect(field('Exclusion 1')).toHaveValue('intern');
-  expect(writes).toBe(1); await user.click(button('Save search')); expect(await screen.findByText('Saved “My draft”.')).toBeVisible(); expect(writes).toBe(2);
+  expect(writes).toBe(1); await save(user); expect(await screen.findByText('Saved “My draft”.')).toBeVisible(); expect(writes).toBe(2);
 });
 
 test('keeps a deleted search draft available for review and cancellation', async () => {
   items = [search()]; server.use(http.put(path + '/:id', () => { items = []; return failure(404); }));
-  const user = await edit(); await user.type(field('Search name'), ' draft'); await user.click(button('Save search'));
+  const user = await edit(); await user.type(field('Search name'), ' draft'); await save(user);
   await user.click(await screen.findByRole('button', { name: 'Reload saved searches' }));
   expect(await screen.findByText(/This search was deleted elsewhere/)).toBeVisible(); expect(field('Search name')).toHaveValue('Engineering draft');
   expect(button('Save search')).toBeDisabled(); await user.click(button('Cancel editing')); expect(button('New search')).toHaveFocus();
@@ -154,7 +157,7 @@ test('keeps a deleted search draft available for review and cancellation', async
 test.each(['network', 'server'])('requires explicit review after an uncertain %s create failure', async kind => {
   let writes = 0; server.use(http.post(path, () => { writes++; return kind === 'network' ? HttpResponse.error() : failure(503); }));
   const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'New search' }));
-  await user.type(field('Search name'), 'My draft'); await user.type(field('Group 1 term 1'), 'Python'); await user.click(button('Save search'));
+  await user.type(field('Search name'), 'My draft'); await user.type(field('Group 1 term 1'), 'Python'); await save(user);
   expect(await screen.findByText(/The save could not be confirmed/)).toBeVisible(); expect(button('Save search')).toBeDisabled();
   await user.click(button('Reload saved searches')); expect(await screen.findByText(/Latest searches loaded/)).toBeVisible();
   expect(field('Search name')).toHaveValue('My draft'); expect(field('Group 1 term 1')).toHaveValue('Python'); expect(button('Save search')).toBeEnabled(); expect(writes).toBe(1);
@@ -199,11 +202,11 @@ test.each(['list', 'save', 'delete', 'reload'] as const)('clears private state w
   if (operation === 'list') server.use(http.get(path, () => { current = null; return failure(401); }));
   else if (operation === 'delete') server.use(http.delete(path + '/:id', () => { current = null; return failure(403); }));
   else server.use(http.put(path + '/:id', () => { if (operation === 'save') current = null; return failure(operation === 'save' ? 401 : 409); }),
-    http.get(path + '/:id', () => { current = null; return failure(401); }));
+    http.get(path + '/' + String(items[0]?.id), () => { current = null; return failure(401); }));
   mount();
   if (operation === 'delete') { await user.click(await screen.findByRole('button', { name: 'Delete Engineering' })); await user.click(button('Confirm deletion')); }
   if (operation === 'save' || operation === 'reload') {
-    await user.click(await screen.findByRole('button', { name: 'Edit Engineering' })); await user.click(button('Save search'));
+    await user.click(await screen.findByRole('button', { name: 'Edit Engineering' })); await save(user);
     if (operation === 'reload') await user.click(await screen.findByRole('button', { name: 'Reload saved searches' }));
   }
   expect(await screen.findByRole('heading', { name: 'Sign in', level: 1 })).toBeVisible(); expect(screen.queryByDisplayValue('Engineering')).not.toBeInTheDocument();
@@ -213,11 +216,99 @@ test.each(['list', 'save', 'delete', 'reload'] as const)('clears private state w
 test('aborts a departing owner’s pending save and never shows their draft to the next owner', async () => {
   items = [search()]; const deferred = gate(); let aborted = false;
   server.use(http.put(path + '/:id', async ({ request }) => { request.signal.addEventListener('abort', () => { aborted = true; }); await deferred.pending; return HttpResponse.json(search()); }));
-  const user = await edit(); await user.type(field('Search name'), ' private'); await user.click(button('Save search'));
+  const user = await edit(); await user.type(field('Search name'), ' private'); await save(user);
   expect(await screen.findByRole('button', { name: 'Saving search…' })).toBeDisabled();
   current = { ...owner, id: crypto.randomUUID(), email: 'other@example.org' }; items = [];
   await act(async () => { await api.invalidateSession(); }); expect(await screen.findByText('No saved searches yet')).toBeVisible();
   expect(screen.queryByDisplayValue('Engineering private')).not.toBeInTheDocument(); expect(aborted).toBe(true); deferred.release();
   expect(api.queryClient.getQueryData(['searches', owner.id, 0])).toBeUndefined();
   expect(within(screen.getByRole('main')).queryByText('Saved “Engineering”.')).not.toBeInTheDocument();
+});
+
+test('persists every discovery hint and shows the exact server preview and separate parameters', async () => {
+  items = [search()]; const hints = { country: 'fr', language: 'fr', location: 'Paris', recency_days: 30, sites: ['linkedin.com'] };
+  let previewBody: unknown;
+  server.use(http.post(path + '/preview', async ({ request }) => {
+    previewBody = await request.json(); expect(request.headers.get('x-csrf-token')).toBe(owner.csrf_token);
+    return HttpResponse.json({ query: 'Exact server output', provider_parameters: { gl: 'fr', lr: 'lang_fr', location: 'Paris', as_qdr: 'd30' }, hints: ['Approximate results only.'] });
+  }), http.put(path + '/:id', async ({ request }) => {
+    const body = await request.json() as components['schemas']['SearchEdit'];
+    expect(body).toEqual({ name: 'Engineering', expected_revision: 1, definition: { ...hints, groups: [['Python']], exclusions: [] } });
+    items = [{ ...items[0] as SavedSearch, definition: body.definition, revision: 2 }]; return HttpResponse.json(items[0]);
+  }));
+  const user = await edit(); await user.selectOptions(screen.getByLabelText('Search origin country'), 'fr'); await user.selectOptions(screen.getByLabelText('Result language'), 'fr');
+  await user.type(field('Search origin region or city'), 'Paris'); await user.type(field('Document recency in days'), '30'); await user.click(screen.getByLabelText('linkedin.com'));
+  expect(await screen.findByLabelText('Exact Google query')).toHaveTextContent('Exact server output'); expect(screen.getByText('d30')).toBeVisible(); expect(screen.getByText('Approximate results only.')).toBeVisible();
+  expect(previewBody).toEqual({ ...hints, groups: [['Python']], exclusions: [] }); await save(user);
+  await user.click(await screen.findByRole('button', { name: 'Edit Engineering' }));
+  expect(screen.getByLabelText('Search origin country')).toHaveValue('fr'); expect(screen.getByLabelText('Result language')).toHaveValue('fr');
+  expect(field('Search origin region or city')).toHaveValue('Paris'); expect(field('Document recency in days')).toHaveValue('30'); expect(screen.getByLabelText('linkedin.com')).toBeChecked();
+});
+
+test('bounds domains, rejects malformed days without previewing and makes empty defaults explicit', async () => {
+  items = [search()]; let calls = 0; server.use(http.post(path + '/preview', () => { calls++; return HttpResponse.json({ query: 'Default query', provider_parameters: {} }); }));
+  const user = await edit(); await screen.findByLabelText('Exact Google query'); expect(screen.getByText('None specified — provider defaults apply.')).toBeVisible();
+  expect(screen.getByLabelText('Search origin country')).toHaveValue(''); expect(screen.getByLabelText('Result language')).toHaveValue('');
+  const before = calls; vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  for (const value of ['0', '366', '1.5', 'abc', '-1', ' ']) {
+    fireEvent.change(field('Document recency in days'), { target: { value } });
+    expect(field('Document recency in days')).toHaveAccessibleDescription(/whole number from 1 to 365/); expect(button('Save search')).toBeDisabled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); }); expect(calls).toBe(before); expect(screen.queryByLabelText('Exact Google query')).not.toBeInTheDocument();
+  }
+  vi.useRealTimers(); await user.clear(field('Document recency in days')); await user.type(field('Document recency in days'), '007');
+  await screen.findByLabelText('Exact Google query'); expect(button('Save search')).toBeEnabled();
+  for (const site of ['a.org', 'b.org', 'c.org', 'd.org']) await user.click(screen.getByLabelText(site));
+  expect(screen.getByLabelText('linkedin.com')).toBeDisabled(); await user.click(screen.getByLabelText('a.org')); expect(screen.getByLabelText('linkedin.com')).toBeEnabled();
+  await user.click(button('Clear discovery hints')); await screen.findByLabelText('Exact Google query'); await user.click(button('Clear discovery hints'));
+  expect(button('Save search')).toBeEnabled(); expect(field('Document recency in days')).toHaveValue(''); expect(screen.queryAllByRole('checkbox', { checked: true })).toHaveLength(0);
+});
+
+test('debounces with a fake clock, aborts obsolete requests, ignores late responses and cancels on close', async () => {
+  items = [search()]; const user = await edit(); await screen.findByLabelText('Exact Google query');
+  const first = gate(), last = gate(); let calls = 0, firstAborted = false, lastAborted = false, firstFinished = false;
+  const hostile = '<img src=x onerror=alert(1)>';
+  server.use(http.post(path + '/preview', async ({ request }) => {
+    calls++; const number = calls;
+    if (number === 1) { request.signal.addEventListener('abort', () => { firstAborted = true; }); await first.pending; firstFinished = true; }
+    if (number === 3) { request.signal.addEventListener('abort', () => { lastAborted = true; }); await last.pending; }
+    return HttpResponse.json({ query: number === 1 ? 'Obsolete query' : hostile, provider_parameters: {}, hints: [hostile] });
+  }));
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); fireEvent.change(field('Group 1 term 1'), { target: { value: 'Go' } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(299); }); expect(calls).toBe(0); expect(button('Save search')).toBeDisabled();
+  const form = field('Search name').closest('form'); if (!form) throw new Error('Missing form'); fireEvent.submit(form);
+  fireEvent.change(field('Group 1 term 1'), { target: { value: 'Golang' } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(299); }); expect(calls).toBe(0);
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); }); vi.useRealTimers(); await waitFor(() => { expect(calls).toBe(1); }); vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  fireEvent.change(field('Group 1 term 1'), { target: { value: 'Rust' } }); expect(firstAborted).toBe(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); }); vi.useRealTimers();
+  expect(await screen.findByLabelText('Exact Google query')).toHaveTextContent(hostile); expect(document.querySelector('img')).toBeNull();
+  first.release(); await waitFor(() => { expect(firstFinished).toBe(true); }); expect(screen.getByLabelText('Exact Google query')).toHaveTextContent(hostile);
+  fireEvent.change(field('Group 1 term 1'), { target: { value: 'Java' } }); await waitFor(() => { expect(calls).toBe(3); });
+  await user.click(button('Cancel editing')); expect(lastAborted).toBe(true); last.release(); expect(screen.queryByLabelText('Exact Google query')).not.toBeInTheDocument();
+});
+
+test.each([422, 503])('keeps invalid/unavailable preview %i from submission and supports explicit recovery', async status => {
+  items = [search()]; let calls = 0;
+  server.use(http.post(path + '/preview', () => { calls++; return calls === 1 ? failure(status) : HttpResponse.json({ query: 'Recovered query', provider_parameters: {} }); }));
+  const user = await edit(); expect(await screen.findByRole('alert')).toHaveTextContent(status === 422 ? 'This definition is invalid' : 'The preview could not be loaded');
+  expect(button('Save search')).toBeDisabled(); expect(field('Group 1 term 1')).toHaveValue('Python'); expect(screen.queryByText('Private server message')).not.toBeInTheDocument();
+  if (status === 422) { expect(screen.queryByRole('button', { name: 'Retry preview' })).not.toBeInTheDocument(); await user.type(field('Group 1 term 1'), ' engineer'); }
+  else await user.click(button('Retry preview'));
+  expect(await screen.findByLabelText('Exact Google query')).toHaveTextContent('Recovered query'); expect(button('Save search')).toBeEnabled(); expect(calls).toBe(2);
+});
+
+test('retains unavailable saved hints until explicitly cleared, and recovers metadata failure', async () => {
+  items = [search({ groups: [['Python']], language: 'zz', country: 'zz', sites: ['removed.org'] })]; let reads = 0;
+  server.use(http.get(path + '/hints', () => { reads++; return reads === 1 ? failure(503) : HttpResponse.json({ allowed_domains: [], country_codes: [], language_codes: [] }); }));
+  const user = await edit(); expect(await screen.findByText(/Discovery hints could not be loaded/)).toBeVisible(); expect(button('Save search')).toBeDisabled();
+  await user.click(button('Reload discovery hints')); expect(await screen.findByText('No domain hints are configured.')).toBeVisible();
+  expect(screen.getByLabelText('Result language')).toHaveValue('zz'); expect(screen.getByLabelText('Search origin country')).toHaveValue('zz');
+  expect(screen.getByRole('checkbox', { name: /removed.org/ })).toBeChecked(); expect(button('Save search')).toBeDisabled();
+  await user.click(button('Clear discovery hints')); await screen.findByLabelText('Exact Google query'); expect(button('Save search')).toBeEnabled();
+});
+
+test.each(['hints', 'preview'])('discards private query text when %s reports an expired session', async operation => {
+  items = [search()]; const response = () => { current = null; return failure(401); };
+  server.use(operation === 'hints' ? http.get(path + '/hints', response) : http.post(path + '/preview', response));
+  await edit(); expect(await screen.findByRole('heading', { name: 'Sign in', level: 1 })).toBeVisible(); expect(screen.queryByLabelText('Exact Google query')).not.toBeInTheDocument();
 });

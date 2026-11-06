@@ -824,7 +824,7 @@ create/edit/delete controls. Named definitions show OR within groups and AND bet
 literal phrases and optional exclusions. The editor bounds groups, terms and exclusions to the API
 contract, associates local validation errors with fields, and shows duplicate-term guidance.
 The server normalizes and validates saved values; the browser does not compile Google queries.
-Existing discovery parameters are preserved when editing groups; their controls arrive in #41.
+Discovery parameters are preserved when editing groups; #41 adds their controls and query preview.
 
 Edits and confirmed deletions send the saved revision. A conflict or uncertain network outcome
 requires reloading and reviewing before another write; unsaved names, groups and exclusions remain
@@ -840,6 +840,27 @@ size, the editor had no page overflow or automated WCAG A/AA violations, with re
 See the [desktop](docs/validation/issue-40-desktop.jpg) and [mobile](docs/validation/issue-40-mobile.jpg)
 captures. Component tests cover limits, CRUD, failed requests, stale drafts and session changes.
 No provider calls or search runs were made; browser automation in CI remains planned for #67.
+
+Issue #41 adds country, result-language, region/city, document-recency and domain hints. Country and
+region describe search origin, not job eligibility; Google may rewrite or ignore every hint.
+Authenticated `GET /api/v1/searches/hints` exposes the configured domain allowlist and the same offline
+country/language catalogs used by validation. The UI offers those values, at most four domains,
+1–365 recency days and explicit unspecified/provider-default choices. Unavailable saved selections
+remain visible until corrected; clearing hints persists null locale/date values and an empty site list.
+
+After 300ms without a definition change, the editor calls the existing stateless preview endpoint.
+Incomplete/bounded-invalid inputs skip preview; the exact returned query is read-only plain text,
+with separate provider parameters and approximation guidance. Changed definitions abort obsolete
+requests and hide old results. Saving requires a successful preview of the current definition;
+server-invalid definitions require editing, while network failures offer an explicit retry.
+No Google query compiler or provider execution is added to the browser.
+
+Issue #41's real API/PostgreSQL browser pass covered persisted hints, stale edits with retained values,
+explicit clearing and owner isolation. Keyboard country/language selection, Tab, region/date entry,
+checkbox Space, query focus, save/reload and clearing passed. All six width/text-scale combinations
+above had zero overflow or automated WCAG A/AA violations with reduced motion enabled. See
+[desktop hints](docs/validation/issue-41-desktop.jpg) and [mobile preview](docs/validation/issue-41-mobile.jpg).
+Component tests use a fake clock for debounce and gates for cancelled/out-of-order responses.
 
 ### Search provider
 
