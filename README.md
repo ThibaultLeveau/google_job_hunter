@@ -992,6 +992,33 @@ The internal `PostgresPreparation.run(snapshot_id)` parses outside database tran
 unique committed artifact on redelivery or concurrent execution. No current-result pointer is advanced;
 old revisions remain historical. Durable stage orchestration arrives in #51. No AI or new API is added.
 
+### Verified AI plain-text cleaning
+
+Issue #46 adds `PostgresCleaning.run(preparation_id)` using the existing bounded LangChain adapter.
+The model returns ordered paragraph IDs and boilerplate IDs, with every source paragraph accounted
+for exactly once. The application copies verified paragraphs; it accepts no generated job prose.
+Selections must retain source order so headings and caveats cannot acquire different requirements.
+Only exact standalone Home, Privacy policy, Cookie policy and Accept cookies labels can be removed
+(case-insensitive). Other omitted content, unknown/duplicate references or invented fields invalidate
+cleanup. This conservative rule preserves substantive requirements, salary, application instructions
+and caveats even when the model misclassifies them. Source language remains unchanged.
+
+Invalid cleanup, timeout, unavailable input/provider or exceeded input limits produce a `degraded`
+artifact containing the complete prepared source with its original order. Both accepted and degraded
+results retain source-to-cleaned Unicode mappings and hashes. Unknown token usage remains null.
+Each execution permits at most two schema attempts under the existing input/output/time limits;
+no semantic-validation retry is added. Accounting stores bounded call metadata, never source text.
+
+Immutable artifacts reference their preparation revision and hash; cache identity includes the cleaner
+prompt/schema and non-secret model/settings configuration. Reruns reuse committed artifacts, including
+degraded fallback; configuration/source changes produce new identities. Concurrent uncached runs can
+repeat calls before the unique publication commits (at-least-once delivery), but share one artifact.
+Each completed execution's call records commit separately from the winning artifact's usage list,
+so concurrent publication retains both executions' known usage. A crash before publication can still
+lose usage evidence; it never establishes zero cost. Model calls hold no database transaction.
+Worker orchestration and global budgets remain #51/#54;
+this issue adds no API, embeddings, metadata extraction or client HTML rendering.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
