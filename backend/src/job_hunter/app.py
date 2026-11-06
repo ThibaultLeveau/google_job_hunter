@@ -44,6 +44,8 @@ from job_hunter.infrastructure.accounts import (
 )
 from job_hunter.infrastructure.ai import create_ai, load_ai_settings
 from job_hunter.infrastructure.budgets import PostgresBudgets, load_budget_settings
+from job_hunter.infrastructure.crawl_policy import CrawlPolicyStore, PoliteFetcher
+from job_hunter.infrastructure.crawling import PostgresCrawler
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.documents import (
     LocalStorage,
@@ -51,13 +53,17 @@ from job_hunter.infrastructure.documents import (
     PostgresExtraction,
     load_storage_settings,
 )
+from job_hunter.infrastructure.fetching import HttpFetcher, load_fetch_settings
+from job_hunter.infrastructure.job_details import PostgresJobDetails
 from job_hunter.infrastructure.job_listing import create_listing
+from job_hunter.infrastructure.match_scheduling import create_schedule
 from job_hunter.infrastructure.oidc import (
     CALLBACK,
     GoogleProvider,
     PostgresOidc,
     load_google_settings,
 )
+from job_hunter.infrastructure.pipeline import create_pipeline
 from job_hunter.infrastructure.profiles import PostgresProfiles
 from job_hunter.infrastructure.reauth import PostgresProofs, recency_seconds
 from job_hunter.infrastructure.recovery import PostgresRecovery
@@ -67,6 +73,7 @@ from job_hunter.infrastructure.search_provider import (
 )
 from job_hunter.infrastructure.searches import PostgresSearches
 from job_hunter.settings import Settings, load_settings
+from job_hunter.worker import SystemClock
 
 
 class HealthResponse(BaseModel):
@@ -142,6 +149,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(searches_router)
     app.state.job_listing = create_listing(database, ai_config) if database else None
+    app.state.job_details = None
+    if database is not None:
+        clock = SystemClock()
+        pipeline = create_pipeline(
+            database,
+            PostgresCrawler(
+                database,
+                PoliteFetcher(
+                    CrawlPolicyStore(database),
+                    HttpFetcher(load_fetch_settings(), now=clock.now),
+                    clock,
+                ),
+                clock,
+            ),
+            ai_config,
+        )
+        app.state.job_details = PostgresJobDetails(
+            pipeline, create_schedule(pipeline, ai_config, clock.now), clock.now
+        )
     app.include_router(jobs_router)
     app.state.sessions = (
         Sessions(
