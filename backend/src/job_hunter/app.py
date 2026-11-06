@@ -14,6 +14,7 @@ from starlette.responses import RedirectResponse
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.documents import router as documents_router
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
+from job_hunter.api.exports import router as exports_router
 from job_hunter.api.jobs import PrivateJobQueries
 from job_hunter.api.jobs import router as jobs_router
 from job_hunter.api.profiles import router as profiles_router
@@ -53,6 +54,7 @@ from job_hunter.infrastructure.documents import (
     PostgresExtraction,
     load_storage_settings,
 )
+from job_hunter.infrastructure.exports import PostgresExports
 from job_hunter.infrastructure.fetching import HttpFetcher, load_fetch_settings
 from job_hunter.infrastructure.job_details import PostgresJobDetails
 from job_hunter.infrastructure.job_listing import create_listing
@@ -283,6 +285,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.auth_result_url = result_url
     seconds = recency_seconds()
+    app.state.exports = (
+        PostgresExports(database, lambda: datetime.now(UTC), seconds)
+        if database is not None
+        else None
+    )
+    app.include_router(exports_router)
     app.state.reauthentication = (
         Reauthentication(
             PostgresProofs(database),

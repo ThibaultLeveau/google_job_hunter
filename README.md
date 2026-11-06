@@ -391,11 +391,52 @@ URLs at the configured callback origin. They redirect to the configured login UR
 `conflict`, `reauthentication_required` and `failed`. Only successful callbacks return their bound action.
 Fresh Google proof requests `max_age=0` and essential `auth_time`, which must be enabled in
 [Google client settings](https://developers.google.com/identity/openid-connect/openid-connect).
+
 Missing, future or pre-flow authentication time fails closed; the already-linked subject must match.
 Intent, user, session and action are saved in encrypted single-use flow state. Linking never changes
 email/verification or merges accounts; collisions are conflicts and same-owner links are idempotent.
 Password proof shares login limits (5/account and 30/IP per five minutes); Google starts share the
 30/IP per-five-minute OAuth budget. Callback queries stay scrubbed from application access logs.
+
+### Personal data export
+
+POST `/api/v1/account/export` with the session cookie, allowed Origin and CSRF header;
+omit the body or send `{}`. No owner, filter or destination parameter is accepted.
+Recent authentication is required for `export_data`, including a second session/recency
+check inside the export's read-only PostgreSQL snapshot. An expired proof returns 403
+`reauthentication_required`; complete the existing password or Google proof flow with
+`action: "export_data"` and repeat the request. Account-settings controls arrive in #64.
+
+The response is a UTF-8 JSON attachment named `google-job-hunter-export-v1.json`, with
+`Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Its stable envelope is
+`format: "google-job-hunter"`, `version: 1`, `exported_at` (UTC), `owner_id` and:
+
+- `profile`: revision, accepted facts, user-edited fields, available source quotes,
+  document versions/languages and unavailable-source markers.
+- `documents`: metadata, including retained deletion timestamps, without storage keys.
+- `saved_searches`, `runs`, `discoveries`: retained definitions/deletion timestamps,
+  frozen run inputs, status/counters and the owner's discovered URLs/ranks.
+- `matches`: every retained private result generation, provenance/version identifiers,
+  scores, assessments and the professional facts captured for that evaluation.
+
+Top-level collections have deterministic ordering; absent collections are empty and
+unknown values remain null. The OpenAPI `PersonalExport` schema defines the complete format. Historical
+matches are snapshots, not claims of current eligibility. Credentials, action tokens,
+request keys, provider call/diagnostic payloads and other owners' records are excluded.
+No raw crawled pages or pending extraction proposals are included.
+
+Exports are bounded to 2,000 records (including source links, unavailable-source markers
+and historical professional facts) and 8 MiB of UTF-8 JSON. Larger exports return 413
+`export_too_large` before sending an attachment; they are never silently truncated.
+No queued artifact or third-party delivery is created. Original files remain available
+through owner-only `GET /api/v1/documents/{id}/download` while retained. Deleted documents
+cannot be downloaded; accepted facts retain unavailable-source markers without their old
+quotes. Exports include only retained data and do not restore purged sources or artifacts.
+
+Issue #62 browser validation used real API/worker/PostgreSQL services with deterministic
+providers: empty/populated exports, a downloaded JSON file, byte-identical UTF-8 original
+download, expired proof, password reauthentication and second-owner isolation passed.
+No browser errors or external provider requests occurred.
 
 ### Accepted profile facts
 
