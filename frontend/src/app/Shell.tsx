@@ -7,6 +7,7 @@ import { EmailAuth } from '../features/auth/EmailAuth';
 import { GoogleCallback } from '../features/auth/GoogleSignIn';
 import { Recovery } from '../features/auth/Recovery';
 import { Verification, VerificationRequired } from '../features/auth/Verification';
+import { AccountCallback, AccountSettings } from '../features/settings/AccountSettings';
 import { Profile } from '../features/profile/Profile';
 import { Searches } from '../features/searches/Searches';
 import { Jobs } from '../features/jobs/Jobs';
@@ -70,17 +71,19 @@ function RequireSession({ session, signingOut }: { session: UseQueryResult<Sessi
 function AuthPage({ session }: { session: Session | null }) {
   const location = useLocation();
   const notice = sessionNotice(location.state);
+  const state: unknown = location.state;
+  const deleted = typeof state === 'object' && state !== null && 'accountDeleted' in state && state.accountDeleted === true;
   if (session && matchPath('/register', location.pathname)) {
     return <Navigate replace to={safeReturnPath(new URLSearchParams(location.search).get('returnTo'))} />;
   }
   return <>
     {notice === 'expired' && <p role="status">Your session has expired. Sign in again to continue.</p>}
-    {notice === 'signed_out' && <p role="status">You are signed out.</p>}
+    {notice === 'signed_out' && <p role="status">{deleted ? 'Account deletion accepted. You are signed out. Private cleanup will continue.' : 'You are signed out.'}</p>}
     {notice === 'logout_failed' && <StatePanel state="error" title="Sign out could not be confirmed"
       description="Your local workspace was cleared. Reload to check your session before trying again."
       action={<a href="/login">Check session again</a>} />}
     {matchPath('/verify-email', location.pathname) ? <Verification />
-      : matchPath('/login', location.pathname) ? <GoogleCallback><EmailAuth key="login" mode="login" /></GoogleCallback>
+      : matchPath('/login', location.pathname) ? <AccountCallback><GoogleCallback><EmailAuth key="login" mode="login" /></GoogleCallback></AccountCallback>
       : matchPath('/register', location.pathname) ? <EmailAuth key="register" mode="register" />
       : <Recovery key={location.pathname} reset={Boolean(matchPath('/reset-password', location.pathname))} />}
   </>;
@@ -130,8 +133,10 @@ export function Shell() {
               route.path === '/profile' ? <Profile key={user?.id} ownerId={user?.id ?? ''} /> :
               route.path === '/searches' ? <Searches key={user?.id} ownerId={user?.id ?? ''} /> :
               route.path === '/jobs' ? <Jobs key={user?.id} ownerId={user?.id ?? ''} /> :
-              <StatePanel state="empty" title={`${route.label} tools are not available yet`}
-                description="This section will hold your workspace tools when they are available." />
+              user && <AccountSettings key={user.id} user={user} deleted={() => {
+                signingOut.current = true; api.clearSession();
+                void navigate('/login', { replace: true, state: { reason: 'signed_out', accountDeleted: true } });
+              }} />
             } />)}
           </Route>
           {authRoutes.map(route => <Route key={route.path} path={route.path}

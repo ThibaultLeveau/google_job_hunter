@@ -364,7 +364,7 @@ The callback redirects to `JOB_HUNTER_MAIL_PUBLIC_URL/login#google=` followed by
 Uvicorn receives a scrubbed query; any reverse proxy must also omit callback query strings from logs.
 New accounts use the verified email claim; existing issuer/subject identities retain their stored
 email and verification state. Email conflicts never link accounts; the sign-in screen explains the
-separate authenticated linking action. The identity-linking settings screen remains planned for #64.
+separate authenticated linking action. Account settings provides explicit Google linking with recent-authentication handling.
 The migration downgrade logs Google sessions out. Tests expose `OidcTransport` in `test_oidc.py`
 for local signed-token/JWKS/code fixtures; normal CI does not contact Google.
 
@@ -397,6 +397,31 @@ Intent, user, session and action are saved in encrypted single-use flow state. L
 email/verification or merges accounts; collisions are conflicts and same-owner links are idempotent.
 Password proof shares login limits (5/account and 30/IP per five minutes); Google starts share the
 30/IP per-five-minute OAuth budget. Callback queries stay scrubbed from application access logs.
+
+### Account settings
+
+`/settings` shows the signed-in account's verification and linked methods. Linking Google is an
+explicit action; the UI first obtains a protected authorization URL and offers Continue to Google.
+Provider availability and failures are shown without exposing server details. Callback fragments
+are removed, methods are checked with the API, and no sensitive action runs automatically on return.
+When recent authentication is required, confirm with an existing password or linked Google identity,
+then explicitly retry the original action. Passwords are cleared on submission and stay out of caches.
+
+Download personal data creates `job-hunter-personal-data.json` using the export contract below.
+It contains private data; store it accordingly. Export responses are not saved in application caches.
+Manage or remove an individual upload opens the existing profile/document controls.
+Deletion opens a keyboard-accessible modal with Cancel focused and requires typing `DELETE`.
+Cancel/Escape restores focus; accepted deletion clears private queries and mutations immediately,
+revokes the browser session and explains that asynchronous cleanup continues. Existing sign-out
+behavior also clears private caches. A delayed result cannot download data or change a new session.
+Retention copy distinguishes operator configuration, live cleanup, backups and external providers.
+
+Issue #64 validation uses real Chromium/API/worker/PostgreSQL with a local signed Google fixture:
+password proof, Google cancellation/link/conflict, wrong-subject and successful Google proof,
+JSON download, individual upload removal, deletion proof/confirmation, and session revocation.
+Keyboard focus/Cancel/Escape/Tab were exercised; automated WCAG scans cover 320/768/1440px at
+100%/200% text sizing with reduced motion. Representative [desktop](docs/validation/issue-64-desktop.jpg)
+and [mobile](docs/validation/issue-64-mobile.jpg) captures accompany the recorded results.
 
 ### Account tombstone fencing
 
@@ -463,7 +488,7 @@ omit the body or send `{}`. No owner, filter or destination parameter is accepte
 Recent authentication is required for `export_data`, including a second session/recency
 check inside the export's read-only PostgreSQL snapshot. An expired proof returns 403
 `reauthentication_required`; complete the existing password or Google proof flow with
-`action: "export_data"` and repeat the request. Account-settings controls arrive in #64.
+`action: "export_data"` and repeat the request. The Account settings screen provides this download and its authentication prompt.
 
 The response is a UTF-8 JSON attachment named `google-job-hunter-export-v1.json`, with
 `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Its stable envelope is

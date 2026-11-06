@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
 
 export const server = setupServer(
+  http.get('http://localhost/api/auth/methods', () => HttpResponse.json({ methods: ['password'], auth_method: 'password', authenticated_at: null, recent: false, recency_seconds: 300 })),
   http.get('http://localhost/api/v1/searches/runs', () => HttpResponse.json({ items: [], next_offset: null })),
   http.get('http://localhost/api/v1/documents', () => HttpResponse.json([])),
   http.get('http://localhost/api/v1/jobs', () => HttpResponse.json({ items: [], next_cursor: null })),

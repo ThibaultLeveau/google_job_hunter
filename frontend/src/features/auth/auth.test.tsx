@@ -140,7 +140,7 @@ test.each(['/profile', '/searches', '/jobs'])('withholds %s tools from unverifie
   await user.click(screen.getByRole('link', { name: 'Open email verification' }));
   expect(await screen.findByRole('button', { name: 'Send a new verification email' })).toBeEnabled();
   await user.click(screen.getByRole('link', { name: 'Settings' }));
-  expect(await screen.findByText('Settings tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('Sign-in and verification')).toBeVisible();
 });
 
 test('clears a verification URL, keeps its token through inline login and confirms actual server state', async () => {
