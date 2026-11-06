@@ -692,9 +692,8 @@ class PostgresDocuments(Documents):
                 .where(DocumentRecord.id == document, DocumentRecord.owner_id == owner)
                 .with_for_update()
             ).one()
-            session.scalar(
-                select(UserRecord).where(UserRecord.id == owner).with_for_update()
-            )
+            if live_user(session, owner) is None:
+                raise DomainError("not_found")
             phase = session.get(DocumentDeletionRecord, document)
             now = self.now()
             if phase is None:
