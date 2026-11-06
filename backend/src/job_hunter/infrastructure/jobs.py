@@ -11,6 +11,7 @@ from sqlalchemy import (
     UniqueConstraint,
     delete,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -40,11 +41,21 @@ class JobSourceRecord(Base):
             initially="DEFERRED",
         ),
         CheckConstraint("canonical_version > 0", name="ck_job_source_version"),
+        ForeignKeyConstraint(
+            ["id", "current_snapshot_id"],
+            ["job_snapshots.source_id", "job_snapshots.id"],
+            name="fk_job_current_snapshot",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True)
     primary_url: Mapped[str] = mapped_column(String(2048))
     canonical_version: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    current_snapshot_id: Mapped[UUID | None]
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class JobURLRecord(Base):
@@ -87,6 +98,12 @@ def source_view(row: JobSourceRecord) -> JobSource:
     return JobSource(row.id, row.primary_url, row.canonical_version, row.created_at)
 
 
+def lock_job_namespace(session: Session, *, exclusive: bool = False) -> None:
+    # Discoveries share the namespace; reconciliation excludes writers before run locks.
+    function = "pg_advisory_xact_lock" if exclusive else "pg_advisory_xact_lock_shared"
+    session.execute(text(f"SELECT {function}(817492351)"))
+
+
 class PostgresJobRegistry:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -103,6 +120,7 @@ class PostgresJobRegistry:
         url = canonical_url(original_url)
         if type(rank) is not int or not 1 <= rank <= 100:
             raise ValueError("Use a rank from 1 to 100.")
+        lock_job_namespace(self.session)
         run = self.session.scalar(
             select(SearchRunRecord)
             .where(
@@ -165,6 +183,7 @@ class PostgresJobRegistry:
 
     def add_alias(self, source_id: UUID, url: str) -> None:
         canonical = canonical_url(url)
+        lock_job_namespace(self.session)
         if self.session.get(JobSourceRecord, source_id) is None:
             raise DomainError("not_found")
         self.session.execute(

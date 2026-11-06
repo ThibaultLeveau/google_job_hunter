@@ -891,7 +891,8 @@ double clicks, uncertain retries, fake-clock visibility/terminal polling, HTTP 4
 Issue #43 adds the synchronous `PublicFetcher.fetch(FetchRequest)` port and `HttpFetcher` adapter.
 It performs one GET hop only. A redirect response contains a validated next request with its visited
 URLs; callers must retain that history and apply robots policy and host pacing before fetching it.
-Those crawler rules and worker wiring arrive in #44. No new API or live crawl is enabled here.
+The #118 prerequisite provides robots policy and shared host leases; worker wiring arrives in #44.
+No new API or live crawl is enabled here.
 
 Only HTTP/80 and HTTPS/443 are permitted. Credentials, ambiguous address forms, non-public/mixed DNS
 answers, mapped/transition IPv6 and unsafe redirects fail closed. Azure's special
@@ -910,7 +911,7 @@ concatenated streams. Other content encodings are unsupported. Returned bytes re
 `MAX_CONNECTIONS=4` (1–16). Share one adapter among worker threads to enforce its socket cap;
 each admitted hop owns at most one HTTP connection and bounded DNS work. Response headers are
 limited to 16 KiB. Errors expose only stable codes, transient/permanent classification, HTTP status
-and numeric Retry-After seconds capped at one hour; HTTP-date Retry-After is left unknown.
+and Retry-After seconds capped at one hour. The #118 prerequisite also supports HTTP-date values.
 
 Tests use the reusable injected `backend/tests/http_fixture.py` transport and resolver; URL and
 address validation still run, with no production bypass setting. They cover rebinding, redirects,
@@ -919,6 +920,29 @@ server with an ephemeral test certificate verifies the original hostname and rej
 only its test transport maps a validated public IP to that server. No external network is required.
 The boundary follows [OWASP's SSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
 and [HTTPCore's network-backend contract](https://www.encode.io/httpcore/network-backends/).
+
+### Public source snapshot persistence
+
+The authorized #44 prerequisites are [#118](https://github.com/ThibaultLeveau/google_job_hunter/issues/118)
+(host policy) followed by [#119](https://github.com/ThibaultLeveau/google_job_hunter/issues/119)
+(snapshot reconciliation). They preserve the existing PR caps; #44 supplies the crawl handler.
+
+Snapshots retain bounded public bytes (at most 16 MiB), requested/final URLs, HTTP status, MIME,
+UTC fetch time, SHA-256 and immutable UUID/version/previous-version lineage. PostgreSQL verifies
+hashes and prevents payload/revision edits. Task ID plus generation records idempotent delivery.
+Unchanged compatible current content reuses its snapshot; changed or reverted content creates a
+new version. Observations retain the actual fetch URLs/time even when reusing older bytes.
+An older observation cannot replace the current source after a newer fetch has been recorded.
+
+Redirect convergence preserves the existing final URL identity, unions private run memberships,
+retains each original discovery in owner-bound run history, and moves aliases and snapshot
+associations without rewriting content lineage. Old source references resolve to the survivor.
+Discovery writers share a PostgreSQL transaction advisory lock; reconciliation takes it exclusively
+before run/source changes. No external I/O belongs in these transactions. Callers publishing worker
+results must first fence the task within the same transaction, as the worker store already does.
+Job reads still require an authenticated owner's run association. Private discovery tracking values
+stay in run provenance, not public snapshots. Future processing stages must retain snapshot IDs and
+versions; this prerequisite does not add cleanup, AI, browser fetching or a live worker handler.
 
 ### Search provider
 
@@ -1140,7 +1164,7 @@ Listing an issue here does not authorize implementing it as part of issue #1.
 | 41 | [#41 Add discovery filters and server-generated Google query previews](https://github.com/ThibaultLeveau/google_job_hunter/issues/41) | Search discovery | [#40](https://github.com/ThibaultLeveau/google_job_hunter/issues/40), [#35](https://github.com/ThibaultLeveau/google_job_hunter/issues/35) |
 | 42 | [#42 Run searches and display discovery progress and outcomes](https://github.com/ThibaultLeveau/google_job_hunter/issues/42) | Search discovery | [#41](https://github.com/ThibaultLeveau/google_job_hunter/issues/41), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39) |
 | 43 | [#43 Build an SSRF-resistant bounded HTTP fetch adapter](https://github.com/ThibaultLeveau/google_job_hunter/issues/43) | Crawling | [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11) |
-| 44 | [#44 Crawl public pages with robots policy, host pacing, and snapshots](https://github.com/ThibaultLeveau/google_job_hunter/issues/44) | Crawling | [#43](https://github.com/ThibaultLeveau/google_job_hunter/issues/43), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39) |
+| 44 | [#44 Crawl public pages with robots policy, host pacing, and snapshots](https://github.com/ThibaultLeveau/google_job_hunter/issues/44) | Crawling | [#43](https://github.com/ThibaultLeveau/google_job_hunter/issues/43), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39), authorized prerequisites [#118](https://github.com/ThibaultLeveau/google_job_hunter/issues/118) then [#119](https://github.com/ThibaultLeveau/google_job_hunter/issues/119) |
 | 45 | [#45 Convert fetched HTML into bounded plain text with provenance](https://github.com/ThibaultLeveau/google_job_hunter/issues/45) | Crawling | [#44](https://github.com/ThibaultLeveau/google_job_hunter/issues/44) |
 | 46 | [#46 Use LangChain to select and organize faithful plain-text job content](https://github.com/ThibaultLeveau/google_job_hunter/issues/46) | AI job processing | [#45](https://github.com/ThibaultLeveau/google_job_hunter/issues/45), [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27) |
 | 47 | [#47 Chunk cleaned job text deterministically with source offsets](https://github.com/ThibaultLeveau/google_job_hunter/issues/47) | AI job processing | [#46](https://github.com/ThibaultLeveau/google_job_hunter/issues/46), [#8](https://github.com/ThibaultLeveau/google_job_hunter/issues/8) |
