@@ -180,10 +180,17 @@ def materialize(
     if work.status == "conflicting":
         arrangement = "conflicting"
     elif work.status == "known":
-        fact = work.values[0]
-        context = citation(source, fact.evidence)
-        if not re.search(r"\b(not|no|never|except|pas|sans|kein)\b", context, re.I):
-            arrangement = ARRANGEMENTS.get(fact.value.casefold(), "unknown")
+        if any(
+            re.search(
+                r"\b(not|no|never|except|pas|sans|kein)\b",
+                citation(source, fact.evidence),
+                re.I,
+            )
+            for fact in work.values
+        ):
+            fields["work_arrangement"] = FactSet(status="ambiguous", values=work.values)
+        else:
+            arrangement = ARRANGEMENTS.get(work.values[0].value.casefold(), "unknown")
     salary_status: Status = "unknown"
     salaries = selection.salaries
     if salaries:

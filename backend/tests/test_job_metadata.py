@@ -143,6 +143,7 @@ def test_langchain_complete_source_language_restrictions_and_salary() -> None:
         "currencies",
         "contradiction",
         "negated",
+        "contradictory_negation",
         "non_job",
         "unclear",
     ],
@@ -206,7 +207,7 @@ def test_unknowns_conflicts_and_classification(case: str) -> None:
                 ]
             }
         )
-    elif case == "negated":
+    elif case in {"negated", "contradictory_negation"}:
         paragraph = source.paragraphs[-2]
         negative = Citation(
             paragraph_id=paragraph.id,
@@ -214,16 +215,12 @@ def test_unknowns_conflicts_and_classification(case: str) -> None:
             end=paragraph.end,
             quote="Remote",
         )
-        chosen = chosen.model_copy(
-            update={
-                "facts": [
-                    f.model_copy(update={"evidence": negative})
-                    if f.field == "work_arrangement"
-                    else f
-                    for f in chosen.facts
-                ]
-            }
-        )
+        remote = next(f for f in chosen.facts if f.field == "work_arrangement")
+        facts = [f for f in chosen.facts if f.field != "work_arrangement"]
+        if case == "contradictory_negation":
+            facts.append(remote)
+        facts.append(remote.model_copy(update={"evidence": negative}))
+        chosen = chosen.model_copy(update={"facts": facts})
     elif case == "non_job":
         source = prepared("Privacy policy")
         chosen = Selection(
@@ -244,8 +241,9 @@ def test_unknowns_conflicts_and_classification(case: str) -> None:
         )
     elif case == "contradiction":
         assert result.work_arrangement == "conflicting"
-    elif case == "negated":
+    elif case in {"negated", "contradictory_negation"}:
         assert result.work_arrangement == "unknown"
+        assert result.fields["work_arrangement"].status == "ambiguous"
     else:
         assert result.state == ("non_job" if case == "non_job" else "ambiguous")
 
