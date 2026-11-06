@@ -1724,6 +1724,40 @@ Live-provider credentials, public URL, retention and budgets are operator settin
 [the architecture](docs/architecture.md#operator-settings-and-fixture-contract).
 The backend bootstrap makes no paid calls and performs no deployment.
 
+## Deterministic test stack
+
+Start local PostgreSQL/pgvector first and export `TEST_DATABASE_URL` as above. The database
+role needs `CREATE DATABASE`; only loopback hosts are accepted. From the repository root:
+
+```bash
+uv run --directory backend --locked python tests/stack_harness.py start --mode test --state /tmp/job-hunter-test.json
+```
+
+The foreground command creates a fresh database, migrates it, seeds Alice and Bob, then starts
+the real API and worker as separate processes. Readiness produces private JSON containing the
+API URL, synthetic credentials and storage path. Use a new state path for each simultaneous run.
+Ctrl-C tears down both processes, its database and private storage, including on startup failure.
+For automation, use the same command with `stop --state /tmp/job-hunter-test.json`; `seed` is
+idempotent and `reset --scenario success|duplicate|transient|owner-isolation` restarts a clean stack.
+These actions require the same `--state` argument. Optional `--port` fixes the API port; otherwise
+it is allocated dynamically. `--frontend-url` defaults to `http://127.0.0.1:5173`.
+
+Search for the single keyword `Python` without filters. Duplicate returns the same canonical job
+on two pages; transient returns HTTP 503 on the first crawl before durable retry succeeds. Each scenario
+seeds two verified owners for isolation assertions. Crawl/chat/vector fixtures produce a tiny
+synthetic job and versioned artifacts; profile extraction accepts the source text from
+`backend/tests/test_extraction.py`. Unconfigured provider requests and external sockets fail.
+The real database, ownership checks, queue, leases and validators remain active.
+
+`mail --state PATH` reads observed links from private files; `authorize --state PATH --url URL`
+registers the real Google authorization URL and returns a synthetic callback for the same browser.
+This exercises nonce, PKCE and signed tokens without an external account. Observation never uses
+an HTTP bypass route. Files use mode 0600 in private temporary storage; teardown deletes them.
+Composition requires explicit test mode and rejects inherited production provider settings.
+Helpers live outside the packaged application; no production switch enables this harness.
+Run its smoke and lifecycle tests with `uv run --directory backend --locked pytest
+tests/test_stack_harness.py --require-database`. Playwright configuration follows in #67.
+
 ## Contribution workflow
 
 Start from fetched current `main` after the selected issue's explicit prerequisites merge.
