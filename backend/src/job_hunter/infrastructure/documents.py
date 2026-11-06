@@ -16,15 +16,17 @@ from sqlalchemy import (
     Select,
     String,
     UniqueConstraint,
+    and_,
+    delete,
     func,
     select,
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Mapped, Session, aliased, mapped_column
 
-from job_hunter.application.documents import Documents, PrivateStorage
+from job_hunter.application.documents import DeletionState, Documents, PrivateStorage
 from job_hunter.application.extraction import Extracted, ExtractProfile
 from job_hunter.application.worker import RetryableTaskError
 from job_hunter.domain.documents import PARSER_VERSION, Document, ParseResult
@@ -83,6 +85,16 @@ class DocumentRecord(Base):
     parse_error: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DocumentDeletionRecord(Base):
+    __tablename__ = "document_deletions"
+    __table_args__ = (CheckConstraint("step > 0", name="ck_document_deletion_step"),)
+    document_id: Mapped[UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    step: Mapped[int]
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ParsedDocumentRecord(Base):
@@ -234,7 +246,11 @@ class DocumentParsing:
             except SQLAlchemyError:
                 raise RetryableTaskError() from None
 
-        return {"document_parse": Handler(execute, self.publish)}
+        cleanup = DocumentCleanup(self.database, self.storage, self.now)
+        return {
+            "document_parse": Handler(execute, self.publish),
+            "document_cleanup": Handler(cleanup.execute, cleanup.publish),
+        }
 
 
 def snapshot(row: DocumentRecord) -> Document:
@@ -326,7 +342,13 @@ class PostgresExtraction:
     def enqueue(
         self, session: Session, parsed: ParsedDocumentRecord, now: datetime
     ) -> None:
-        if self.enabled:
+        if (
+            self.enabled
+            and session.scalar(
+                self.current().where(ParsedDocumentRecord.id == parsed.id)
+            )
+            is not None
+        ):
             key = TaskKey(self.stage.kind, parsed.id, 1)
             PostgresTaskQueue(session).enqueue(
                 NewTask(key, parsed.id, now, max_attempts=1), now
@@ -336,9 +358,18 @@ class PostgresExtraction:
         if not self.enabled:
             return 0
         with self.database.transaction() as session:
+            parent = aliased(TaskRecord)
             rows = list(
                 session.scalars(
                     self.current()
+                    .join(
+                        parent,
+                        and_(
+                            parent.kind == "document_parse",
+                            parent.subject_id == DocumentRecord.id,
+                            parent.subject_version == DocumentRecord.version,
+                        ),
+                    )
                     .where(
                         ~select(TaskRecord.id)
                         .where(
@@ -349,7 +380,7 @@ class PostgresExtraction:
                     )
                     .order_by(ParsedDocumentRecord.created_at, ParsedDocumentRecord.id)
                     .limit(max(1, min(limit, 100)))
-                    .with_for_update(skip_locked=True, of=ParsedDocumentRecord)
+                    .with_for_update(skip_locked=True, of=parent)
                 )
             )
             for parsed in rows:
@@ -577,6 +608,123 @@ class PostgresDocuments(Documents):
                 raise DomainError("not_found")
             return snapshot(row), row.storage_key
 
+    @staticmethod
+    def deletion_state(
+        session: Session, phase: DocumentDeletionRecord
+    ) -> DeletionState:
+        failed = session.scalar(
+            select(TaskRecord.id).where(
+                TaskRecord.kind == "document_cleanup",
+                TaskRecord.subject_id == phase.document_id,
+                TaskRecord.subject_version == phase.step,
+                TaskRecord.status == "failed",
+            )
+        )
+        return DeletionState(
+            id=phase.document_id,
+            status="deleted" if phase.completed_at else "deleting",
+            error="cleanup_failed" if failed and not phase.completed_at else None,
+        )
+
+    def status(self, owner: UUID, document: UUID) -> Document | DeletionState:
+        with self.database.transaction() as session:
+            phase = session.scalar(
+                select(DocumentDeletionRecord)
+                .join(DocumentRecord)
+                .where(DocumentRecord.id == document, DocumentRecord.owner_id == owner)
+            )
+            if phase is not None:
+                return self.deletion_state(session, phase)
+        return self.get(owner, document)[0]
+
+    def delete(self, owner: UUID, document: UUID) -> DeletionState:
+        # Profiles reference document tables, so import the lifecycle join at call time.
+        from job_hunter.infrastructure.profiles import detach_document
+
+        with self.database.transaction() as session:
+            if (
+                session.scalar(
+                    select(DocumentRecord.id).where(
+                        DocumentRecord.id == document, DocumentRecord.owner_id == owner
+                    )
+                )
+                is None
+            ):
+                raise DomainError("not_found")
+            # Freeze producers before locking the document, matching worker publication.
+            parse_tasks = list(
+                session.scalars(
+                    select(TaskRecord)
+                    .where(
+                        TaskRecord.kind == "document_parse",
+                        TaskRecord.payload_ref == document,
+                    )
+                    .order_by(TaskRecord.id)
+                    .with_for_update()
+                )
+            )
+            parsed = select(ParsedDocumentRecord.id).where(
+                ParsedDocumentRecord.document_id == document
+            )
+            extraction_tasks = list(
+                session.scalars(
+                    select(TaskRecord)
+                    .where(
+                        TaskRecord.kind.startswith("profile_extract_", autoescape=True),
+                        TaskRecord.payload_ref.in_(parsed),
+                    )
+                    .order_by(TaskRecord.id)
+                    .with_for_update()
+                )
+            )
+            list(
+                session.scalars(
+                    select(TaskRecord)
+                    .where(
+                        TaskRecord.kind == "document_cleanup",
+                        TaskRecord.payload_ref == document,
+                    )
+                    .order_by(TaskRecord.id)
+                    .with_for_update()
+                )
+            )
+            row = session.scalars(
+                select(DocumentRecord)
+                .where(DocumentRecord.id == document, DocumentRecord.owner_id == owner)
+                .with_for_update()
+            ).one()
+            session.scalar(
+                select(UserRecord).where(UserRecord.id == owner).with_for_update()
+            )
+            phase = session.get(DocumentDeletionRecord, document)
+            now = self.now()
+            if phase is None:
+                row.deleted_at = row.deleted_at or now
+                detach_document(session, row)
+                phase = DocumentDeletionRecord(document_id=document, step=1)
+                session.add(phase)
+                for task in parse_tasks + extraction_tasks:
+                    if task.status != "succeeded":
+                        task.status, task.error_code = "cancelled", None
+                        task.generation += 1
+                        task.lease_token, task.lease_expires_at = uuid4(), None
+                        task.updated_at = now
+            if phase.completed_at is None:
+                queue = PostgresTaskQueue(session)
+                cleanup_task = queue.enqueue(
+                    NewTask(
+                        TaskKey("document_cleanup", document, phase.step),
+                        document,
+                        now,
+                        max_attempts=5,
+                    ),
+                    now,
+                )
+                if cleanup_task.status == "failed":
+                    queue.retry(cleanup_task.key, cleanup_task.generation, now)
+            session.flush()
+            return self.deletion_state(session, phase)
+
     def referenced(self, key: str) -> bool:
         with self.database.transaction() as session:
             return (
@@ -584,6 +732,103 @@ class PostgresDocuments(Documents):
                     select(DocumentRecord.id).where(DocumentRecord.storage_key == key)
                 )
                 is not None
+            )
+
+
+class DocumentCleanup:
+    def __init__(
+        self, database: Database, storage: PrivateStorage, now: Callable[[], datetime]
+    ) -> None:
+        self.database, self.storage, self.now = database, storage, now
+
+    def execute(self, task: Task) -> bool:
+        try:
+            with self.database.transaction() as session:
+                key = session.scalar(
+                    select(DocumentRecord.storage_key)
+                    .join(DocumentDeletionRecord)
+                    .where(
+                        DocumentRecord.id == task.payload_ref,
+                        DocumentRecord.id == task.key.subject_id,
+                        DocumentRecord.deleted_at.is_not(None),
+                        DocumentDeletionRecord.step == task.key.subject_version,
+                        DocumentDeletionRecord.completed_at.is_(None),
+                        select(TaskRecord.id)
+                        .where(
+                            TaskRecord.id == task.id,
+                            TaskRecord.status == "running",
+                            TaskRecord.generation == task.generation,
+                            TaskRecord.lease_token == task.lease_token,
+                            TaskRecord.lease_expires_at > self.now(),
+                        )
+                        .exists(),
+                    )
+                )
+            if key is None:
+                return False
+            self.storage.discard(key)
+            return True
+        except OSError, SQLAlchemyError:
+            raise RetryableTaskError() from None
+
+    def publish(
+        self, session: Session, task: Task, result: object, now: datetime
+    ) -> None:
+        if result is not True:
+            return
+        phase = session.scalar(
+            select(DocumentDeletionRecord)
+            .join(DocumentRecord)
+            .where(
+                DocumentRecord.id == task.payload_ref,
+                DocumentRecord.id == task.key.subject_id,
+                DocumentRecord.deleted_at.is_not(None),
+                DocumentDeletionRecord.step == task.key.subject_version,
+                DocumentDeletionRecord.completed_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if phase is None:
+            return
+        parsed = select(ParsedDocumentRecord.id).where(
+            ParsedDocumentRecord.document_id == task.payload_ref
+        )
+        proposals = (
+            select(ProposalRecord.id)
+            .join(ExtractionRecord)
+            .where(ExtractionRecord.parsed_id.in_(parsed))
+            .order_by(ProposalRecord.id)
+            .limit(100)
+        )
+        session.execute(delete(ProposalRecord).where(ProposalRecord.id.in_(proposals)))
+        if (
+            session.scalar(
+                select(ProposalRecord.id)
+                .join(ExtractionRecord)
+                .where(ExtractionRecord.parsed_id.in_(parsed))
+                .limit(1)
+            )
+            is None
+        ):
+            session.execute(
+                delete(ParsedDocumentRecord).where(
+                    ParsedDocumentRecord.id.in_(
+                        parsed.order_by(ParsedDocumentRecord.id).limit(10)
+                    )
+                )
+            )
+        if session.scalar(parsed.limit(1)) is None:
+            phase.completed_at = now
+        else:
+            phase.step += 1
+            PostgresTaskQueue(session).enqueue(
+                NewTask(
+                    TaskKey("document_cleanup", task.payload_ref, phase.step),
+                    task.payload_ref,
+                    now,
+                    max_attempts=5,
+                ),
+                now,
             )
 
 
@@ -626,6 +871,11 @@ class LocalStorage(PrivateStorage):
     def discard(self, key: str) -> None:
         for suffix in (".part", ".blob"):
             self.path(key, suffix).unlink(missing_ok=True)
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def open(self, key: str) -> BinaryIO:
         return cast(

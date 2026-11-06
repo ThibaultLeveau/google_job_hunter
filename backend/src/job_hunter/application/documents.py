@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import BinaryIO, Protocol
+from typing import BinaryIO, Literal, Protocol
 from uuid import UUID
 
 from job_hunter.domain.documents import (
@@ -12,6 +12,7 @@ from job_hunter.domain.documents import (
     validate_content,
 )
 from job_hunter.domain.errors import DomainError
+from job_hunter.domain.profiles import ProfileValue
 
 
 class PrivateStorage(Protocol):
@@ -21,7 +22,16 @@ class PrivateStorage(Protocol):
     def open(self, key: str) -> BinaryIO: ...
 
 
+class DeletionState(ProfileValue):
+    id: UUID
+    status: Literal["deleting", "deleted"]
+    error: Literal["cleanup_failed"] | None = None
+
+
 class Documents(Protocol):
+    def status(self, owner: UUID, document: UUID) -> Document | DeletionState: ...
+    def delete(self, owner: UUID, document: UUID) -> DeletionState: ...
+
     def add(
         self, owner: UUID, key: str, digest: str, name: str, media_type: str, size: int
     ) -> tuple[Document, bool]: ...

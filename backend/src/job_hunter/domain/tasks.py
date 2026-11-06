@@ -7,7 +7,7 @@ from uuid import UUID
 
 from job_hunter.domain.errors import DomainError
 
-TaskStatus = Literal["pending", "running", "succeeded", "failed"]
+TaskStatus = Literal["pending", "running", "succeeded", "failed", "cancelled"]
 
 
 class TaskError(StrEnum):

@@ -41,7 +41,7 @@ class TaskRecord(Base):
             name="ck_tasks_attempts",
         ),
         CheckConstraint(
-            "status IN ('pending','running','succeeded','failed')",
+            "status IN ('pending','running','succeeded','failed','cancelled')",
             name="ck_tasks_status",
         ),
         CheckConstraint(

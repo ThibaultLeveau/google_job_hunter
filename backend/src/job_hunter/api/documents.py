@@ -12,7 +12,11 @@ from starlette.responses import StreamingResponse
 from starlette.types import Send
 
 from job_hunter.api.sessions import verified_user
-from job_hunter.application.documents import DocumentUploads, PendingUpload
+from job_hunter.application.documents import (
+    DeletionState,
+    DocumentUploads,
+    PendingUpload,
+)
 from job_hunter.application.extraction import Proposals
 from job_hunter.domain.accounts import SessionUser
 from job_hunter.domain.documents import TYPES, Document, InvalidDocument, UploadTooLarge
@@ -89,8 +93,19 @@ def documents(
 
 
 @router.get("/{document_id}")
-def status(document_id: UUID, owner: Owner, service: Service) -> Document:
-    return service.records.get(owner.user_id, document_id)[0]
+def status(
+    document_id: UUID, owner: Owner, service: Service
+) -> Document | DeletionState:
+    return service.records.status(owner.user_id, document_id)
+
+
+@router.delete("/{document_id}", responses={202: {"model": DeletionState}})
+def delete_document(
+    document_id: UUID, owner: Owner, service: Service, response: Response
+) -> DeletionState:
+    result = service.records.delete(owner.user_id, document_id)
+    response.status_code = 200 if result.status == "deleted" else 202
+    return result
 
 
 class DocumentDownload(StreamingResponse):
