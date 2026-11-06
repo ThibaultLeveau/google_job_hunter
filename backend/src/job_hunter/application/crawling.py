@@ -31,14 +31,16 @@ def classify(snapshot: FetchedSnapshot) -> CrawlResult:
     if not snapshot.body.strip():
         return CrawlResult("non_job", "empty_page", snapshot)
     if mime != "text/plain":
-        text = snapshot.body.decode("utf-8", errors="replace").lower()
+        text = snapshot.body[:262144].decode("utf-8", errors="replace").lower()
         if re.search(r"<input\b[^>]{0,2048}\btype\s*=\s*['\"]?password\b", text) or any(
             marker in text for marker in ("g-recaptcha", "h-captcha", "cf-chl-")
         ):
             return CrawlResult("blocked", "interactive_challenge", snapshot)
         if (
             re.search(
-                r"<noscript\b[^>]*>[^<]*(?:enable|requires?)[^<]*javascript", text
+                r"<noscript\b[^>]{0,2048}>(?=[^<]{0,2048}javascript)"
+                r"[^<]{0,2048}(?:enable|requires?)",
+                text,
             )
             and re.search(r"<div\s+id=['\"](?:root|app|__next)['\"]\s*>\s*</div>", text)
             and not re.search(r"<(?:main|article|section|h1|p|li)\b", text)

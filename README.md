@@ -959,7 +959,8 @@ Outcomes distinguish fetched, blocked, removed, unsupported, non-job and failed 
 password forms and recognized CAPTCHA markers block processing; 404/410 indicate removal. Missing
 or unsupported MIME is explicit. Empty bodies are non-job outcomes; an empty known app root with
 an explicit JavaScript requirement is unsupported. These checks are conservative; they do not clean
-HTML or decide whether ordinary prose describes a job. Those stages arrive in #45 and later.
+HTML or decide whether ordinary prose describes a job. Marker checks inspect at most 256 KiB;
+JavaScript notices are limited to 2,048 characters. Full preparation arrives in #45 and later.
 No login, challenge, robots or browser-execution bypass is attempted. Source bytes remain untrusted.
 
 Snapshot/alias publication and task success or permanent failure commit together under the task

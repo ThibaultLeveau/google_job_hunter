@@ -138,6 +138,12 @@ def finish(database: Database, process: Worker, clock: FakeClock, task: Task) ->
         ),
         (200, b"text/html", b'<input name="secret" type="password">', "blocked"),
         (200, b"text/html", b'<div class="g-recaptcha"></div>', "blocked"),
+        (
+            200,
+            b"text/html",
+            b'<div id="root"></div><noscript>' + b"enable " * 40000,
+            "fetched",
+        ),
     ],
 )
 def test_worker_persists_explicit_outcomes(
