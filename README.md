@@ -1160,6 +1160,24 @@ Profile, source, requirements, chunk, embedding, model, prompt and rubric revisi
 Known usage records contain no raw inputs. Private persistence, scheduling and publication fencing
 are delivered by #53; durable budget reservation is #54. No profile facts are changed.
 
+### Private match artifact storage
+
+Approved prerequisite [#133](https://github.com/ThibaultLeveau/google_job_hunter/issues/133)
+adds `PostgresMatches`. Logical identities include owner, accepted-profile revision, requirements,
+cleaned content/chunker and evaluator configuration (including model, prompt, rubric and embedding
+space). Immutable attempt generations preserve results and the professional facts actually supplied.
+Known calls are private, schema-checked records; no raw documents, prompts or private vectors are stored.
+Public analysis is referenced and reused. Historical source IDs resolve through the public alias map.
+
+Capture and publication check live ownership/discovery, current source/configuration and profile
+revision under short database locks. Provider work runs after those transactions close. Publication
+revalidates result identity, citations and deterministic scores, and shares the caller's transaction
+with known usage records. Duplicate deliveries reuse one artifact while retaining distinct known calls.
+`run` reuses its default generation, including failures; only an explicit internal generation evaluates
+again. `get` exposes owned history, including stale attempts, while denying removed associations.
+Scheduling, current/stale/pending status selection, task fencing and budgeted user reevaluation remain
+#53; this storage service provides no endpoint or autonomous retry loop. Unified budgets remain #54.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
@@ -1389,7 +1407,7 @@ Listing an issue here does not authorize implementing it as part of issue #1.
 | 50 | [#50 Extract a concise application-requirements list with source evidence](https://github.com/ThibaultLeveau/google_job_hunter/issues/50) | AI job processing | [#49](https://github.com/ThibaultLeveau/google_job_hunter/issues/49) |
 | 51 | [#51 Connect versioned crawl, analysis, and embedding stages](https://github.com/ThibaultLeveau/google_job_hunter/issues/51) | AI job processing | [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11), [#48](https://github.com/ThibaultLeveau/google_job_hunter/issues/48), [#50](https://github.com/ThibaultLeveau/google_job_hunter/issues/50), approved prerequisite [#129](https://github.com/ThibaultLeveau/google_job_hunter/issues/129) |
 | 52 | [#52 Evaluate profile fit against explicit job requirements](https://github.com/ThibaultLeveau/google_job_hunter/issues/52) | Personalized matching | [#29](https://github.com/ThibaultLeveau/google_job_hunter/issues/29), [#48](https://github.com/ThibaultLeveau/google_job_hunter/issues/48), [#50](https://github.com/ThibaultLeveau/google_job_hunter/issues/50), [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27) |
-| 53 | [#53 Persist private matches and recompute stale evaluations safely](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) | Personalized matching | [#52](https://github.com/ThibaultLeveau/google_job_hunter/issues/52), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39) |
+| 53 | [#53 Persist private matches and recompute stale evaluations safely](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) | Personalized matching | [#52](https://github.com/ThibaultLeveau/google_job_hunter/issues/52), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39), approved prerequisite [#133](https://github.com/ThibaultLeveau/google_job_hunter/issues/133) |
 | 54 | [#54 Enforce atomic per-user and global provider budgets](https://github.com/ThibaultLeveau/google_job_hunter/issues/54) | Operations and privacy | [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51), [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) |
 | 55 | [#55 List discovered jobs with stable pagination and typed filters](https://github.com/ThibaultLeveau/google_job_hunter/issues/55) | Jobs API | [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) |
 | 56 | [#56 Expose job evidence, safe processing status, and authorized retries](https://github.com/ThibaultLeveau/google_job_hunter/issues/56) | Jobs API | [#55](https://github.com/ThibaultLeveau/google_job_hunter/issues/55), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51) |

@@ -10,6 +10,7 @@ from job_hunter.infrastructure import (
     embeddings,  # noqa: F401 -- register public vector tables
     job_metadata,  # noqa: F401 -- register source-verified metadata tables
     jobs,  # noqa: F401 -- register job registry tables
+    matches,  # noqa: F401 -- register private match identities and attempts
     preparation,  # noqa: F401 -- register public text preparation tables
     profiles,  # noqa: F401 -- register profile tables
     requirements,  # noqa: F401 -- register full application requirements
