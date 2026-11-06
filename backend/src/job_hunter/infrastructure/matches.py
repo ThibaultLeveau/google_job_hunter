@@ -144,7 +144,8 @@ def access(session: Session, owner: UUID, job: UUID) -> UUID:
         )
         .order_by(SearchRunRecord.id)
         .limit(1)
-        .with_for_update(of=(SearchRunRecord, SavedSearchRecord))
+        # Discovery locks its run before the owner; yield instead of inverting locks.
+        .with_for_update(of=(SearchRunRecord, SavedSearchRecord), nowait=True)
     )
     if association is None:
         raise DomainError("not_found")

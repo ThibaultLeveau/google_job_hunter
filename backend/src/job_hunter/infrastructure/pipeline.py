@@ -44,6 +44,7 @@ from job_hunter.infrastructure.jobs import (
     RunJobRecord,
     lock_job_namespace,
 )
+from job_hunter.infrastructure.match_events import enqueue_scan
 from job_hunter.infrastructure.preparation import (
     PREPARATION_VERSION,
     PostgresPreparation,
@@ -242,6 +243,20 @@ class PostgresPipeline:
                 and artifacts.requirements is None
             ):
                 missing.append(("requirements", 1))
+        if (
+            artifacts.chunks
+            and artifacts.requirements
+            and artifacts.requirements.payload["state"] in {"ready", "unknown"}
+        ):
+            source = session.get(SnapshotRecord, snapshot_id)
+            assert source is not None
+            enqueue_scan(
+                session,
+                None,
+                source.source_id,
+                f"ready:{artifacts.requirements.id}:{artifacts.chunks.content_id}:{self.policy.version}",
+                now,
+            )
         for stage, batch in missing:
             key = TaskKey(self.kinds[stage], snapshot_id, batch)
             existing = session.scalar(
