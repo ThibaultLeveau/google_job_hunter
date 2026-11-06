@@ -845,6 +845,35 @@ Run `uv run --locked pytest --require-database tests/test_search_provider.py` fr
 transport, pagination, privacy, disabled-state and authenticated-capability tests. No live paid call,
 Google HTML scraping, crawling or search-worker registration is introduced by this issue.
 
+### Public job registry
+
+Issue #38 adds canonicalization version 1 and a PostgreSQL source registry. HTTP(S) URLs are limited
+to 2,048 UTF-8 bytes before/after normalization. Scheme/host case, IDNA host names, IPv6 spelling and
+default ports normalize; fragments and the explicit `utm_source`, `utm_medium`, `utm_campaign`,
+`utm_term`, `utm_content`, `utm_id`, `gclid`, `dclid`, `fbclid`, `msclkid` tracking keys are removed.
+An absent path becomes `/`. Meaningful path/query text, encoding, parameter order, repeated keys,
+blank values and an explicitly empty query remain distinct. Credentials, invalid escapes, controls,
+whitespace and malformed hosts/ports are rejected. No DNS lookup or connection safety claim is made.
+[URI component rules](https://www.rfc-editor.org/rfc/rfc3986.html) guide parsing;
+[IDNA 2008](https://pypi.org/project/idna/) with nontransitional UTS #46 avoids merging `ß` with `ss`.
+
+`PostgresJobRegistry` uses the caller's transaction. Registration locks and authorizes the active
+run, upserts the global canonical URL, and attaches private provenance atomically. Both primary and
+alias URLs occupy `job_urls`' single unique namespace; a deferred composite foreign key requires
+every source's primary URL to belong to that same source. Racing equivalent discoveries create one
+source and separate owner/run associations; a rollback leaves no candidate source or association.
+Each `(run_id, source_id)` retains its first observed original URL, rank and UTC timestamp. Replays
+preserve that observation. Public records contain no search terms, owner IDs, snippets or matches.
+
+Internal alias insertion requires caller-established exact identity; it never merges sources and
+rejects a key already assigned elsewhere. Registration alone never infers aliases between distinct
+canonical URLs. Registry reads require the owner's run association; UUID knowledge grants no access.
+Deleting an owner cascades private associations while preserving public sources for reuse.
+`tests/test_job_urls.py` and `tests/test_job_registry.py` cover canonicalization, privacy, forced
+concurrent inserts, namespace constraints, rollback and migration downgrade/upgrade with PostgreSQL.
+Discovery execution/enqueue (#39), SSRF-safe fetching (#43), fuzzy deduplication and jobs APIs are
+outside this issue; there is no new HTTP endpoint or external call.
+
 | Available since | Working directory | Command contract |
 | --- | --- | --- |
 | [#20](https://github.com/ThibaultLeveau/google_job_hunter/issues/20) | `frontend/` | `npm run generate:api` exports deterministic OpenAPI and generates ignored declarations before checks/build/tests |
