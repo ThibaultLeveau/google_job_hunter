@@ -476,6 +476,25 @@ Revision advances once per batch that creates facts or adds evidence; rejection/
 
 ### Private document uploads
 
+The profile page provides a keyboard-accessible PDF/DOCX/TXT picker and drop zone, explicit upload
+confirmation or existing-document feedback, and a paginated document list. Upload progress is
+indeterminate. The server enforces the configured size limit; the picker describes the 10 MiB default
+and rejects empty, unsupported or larger-than-50-MiB selections before sending bytes.
+Active parsing, extraction and deletion status refreshes every five seconds while the page is visible.
+Polling stops at terminal states or request errors; refresh/retry controls recover failed requests.
+Unmounting or switching accounts aborts requests and stops timers; private caches clear on account changes.
+Downloads use the authorized API. Deletion requires confirmation, preserves accepted facts, immediately
+removes cached source quotes and follows cleanup until completion; failed cleanup can be resumed.
+The UI explains scanned/encrypted/invalid files and unavailable extraction. It does not parse files in
+the browser or review proposals; failed parsing requires a corrected/different file or manual facts.
+
+Issue #33 browser validation used the real API, worker and PostgreSQL with fixture extraction: keyboard
+file selection/upload, TXT/DOCX/scanned PDF handling, duplicate feedback, invalid-content recovery,
+byte-identical download, confirmed deletion with accepted-fact retention, and account isolation passed.
+At 320/768/1440px and 100/200% text scale, there was no horizontal overflow or axe violation; reduced
+motion and keyboard confirmation/cancellation/focus recovery passed. See the document-list
+[desktop](docs/validation/issue-33-desktop.jpg) and deletion [mobile](docs/validation/issue-33-mobile.jpg) captures.
+
 Verified sessions POST raw PDF, DOCX or UTF-8 TXT bytes to `/api/v1/documents` with the matching
 `Content-Type`, percent-encoded UTF-8 `X-Document-Name`, Origin and CSRF headers. The binary body streams;
 signature/container/encoding checks precede persistence.

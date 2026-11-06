@@ -4,6 +4,7 @@ import type { components } from '../../../generated/api';
 import { api, ApiError } from '../../shared/api';
 import { Badge, Button, Field, StatePanel } from '../../shared/ui';
 import { FactEditor, type EditorTarget } from './FactEditor';
+import { Documents } from '../documents/Documents';
 
 type Snapshot = components['schemas']['ProfileSnapshot'];
 type Fact = components['schemas']['ProfileFact'];
@@ -156,6 +157,7 @@ export function Profile({ ownerId }: { ownerId: string }) {
         </div>
       </li>)}</ul>
     </section>)}
+    <Documents ownerId={ownerId} />
     {editor && <FactEditor target={editor} missing={Boolean(editor.fact && !edited)}
       evidence={edited && <div><FactDetails fact={edited} /><Evidence fact={edited} /></div>}
       reload={async () => { const result = await profile.refetch(); if (!result.isSuccess) throw new Error('Profile reload failed'); return result.data; }}

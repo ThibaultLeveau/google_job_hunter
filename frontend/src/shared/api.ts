@@ -43,7 +43,9 @@ type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
+  upload?: { file: File; mediaType: string };
 };
+type ResponseData<T> = { data: T; status: number };
 
 export const sessionKey = ['session'] as const;
 const privateQueries = { predicate: (query: Query) => query.queryKey.length !== 1 || query.queryKey[0] !== sessionKey[0] };
@@ -80,7 +82,9 @@ export function createApiClient() {
     queryClient.setQueryData(sessionKey, next);
   }
 
-  async function request<T>(path: `/api/${string}`, { method = 'GET', body, signal }: RequestOptions = {}): Promise<T> {
+  function request<T>(path: `/api/${string}`, options: RequestOptions & { withStatus: true }): Promise<ResponseData<T>>;
+  function request<T>(path: `/api/${string}`, options?: RequestOptions): Promise<T>;
+  async function request(path: `/api/${string}`, { method = 'GET', body, signal, upload, withStatus }: RequestOptions & { withStatus?: boolean } = {}): Promise<unknown> {
     const url = new URL(path, window.location.origin);
     if (!path.startsWith('/api/') || url.origin !== window.location.origin || !url.pathname.startsWith('/api/')) {
       throw new TypeError('API requests must stay within the same-origin /api boundary.');
@@ -94,9 +98,13 @@ export function createApiClient() {
     if (body !== undefined) headers.set('Content-Type', 'application/json');
     if (method !== 'GET' && session) headers.set('X-CSRF-Token', session.csrf_token);
     try {
+      if (upload) {
+        headers.set('Content-Type', upload.mediaType);
+        headers.set('X-Document-Name', encodeURIComponent(upload.file.name));
+      }
       const response = await fetch(url, {
         method, headers, credentials: 'same-origin', redirect: 'error', cache: 'no-store',
-        signal: controller.signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: controller.signal, ...(upload ? { body: upload.file } : body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       const data: unknown = response.status === 204 ? undefined : await response.json().catch(() => undefined);
       controller.signal.throwIfAborted();
@@ -106,7 +114,7 @@ export function createApiClient() {
         throw new ApiError(kind, response.status, envelope(data), retryAfter(response.headers.get('Retry-After')));
       }
       if (data === undefined && response.status !== 204) throw new ApiError('invalid_response', response.status);
-      return data as T;
+      return withStatus ? { data, status: response.status } : data;
     } catch (error) {
       controller.signal.throwIfAborted();
       if (error instanceof ApiError || (record(error) && error.name === 'AbortError')) throw error;
