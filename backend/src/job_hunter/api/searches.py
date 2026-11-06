@@ -3,9 +3,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import Field
+from sqlalchemy.exc import SQLAlchemyError
 
 from job_hunter.api.sessions import authenticated_user, verified_user
-from job_hunter.application.search_provider import SearchCapability, SearchProvider
+from job_hunter.application.search_provider import (
+    ProviderQuota,
+    SearchCapability,
+    SearchProvider,
+)
 from job_hunter.application.searches import (
     RunPage,
     SavedSearch,
@@ -23,6 +28,7 @@ from job_hunter.domain.searches import (
     SearchPreview,
     compile_search,
 )
+from job_hunter.infrastructure.budgets import PostgresBudgets
 
 router = APIRouter(prefix="/api/v1/searches", tags=["searches"])
 Owner = Annotated[SessionUser, Depends(authenticated_user)]
@@ -70,7 +76,24 @@ def preview_search(
 
 @router.get("/provider")
 def provider_status(request: Request, owner: Owner) -> SearchCapability:
-    return cast(SearchProvider, request.app.state.search_provider).capability
+    capability = cast(SearchProvider, request.app.state.search_provider).capability
+    budgets = cast(PostgresBudgets | None, request.app.state.provider_budgets)
+    if budgets is None:
+        raise HTTPException(503)
+    try:
+        search = budgets.availability("search", owner.user_id)
+        tokens = budgets.availability("tokens", owner.user_id)
+    except SQLAlchemyError, ValueError:
+        raise HTTPException(503) from None
+    return capability.model_copy(
+        update={
+            "quota": ProviderQuota(
+                search_remaining=search.remaining,
+                tokens_remaining=tokens.remaining,
+                resets_at=min(search.resets_at, tokens.resets_at),
+            )
+        }
+    )
 
 
 @router.get("/hints")

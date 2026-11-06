@@ -20,6 +20,7 @@ ErrorCode = Literal[
     "provider_failure",
     "refused",
     "accounting_failure",
+    "quota",
 ]
 
 
@@ -166,6 +167,8 @@ class AI:
             raise AIError("input_limit")
         try:
             self.accounting.reserve(call)
+        except AIError:
+            raise
         except Exception:
             raise AIError("accounting_failure") from None
         started, reply, error = self.clock(), None, None

@@ -20,6 +20,7 @@ from job_hunter.application.search_provider import (
     SearchResult,
     SearchUsage,
 )
+from job_hunter.infrastructure.provider_budgets import BudgetedSearch
 from job_hunter.settings import ConfigurationError
 
 PRIVATE_HTTP = ContextVar("private_search_http", default=False)
@@ -335,5 +336,5 @@ def create_search_provider(
     settings: SearchSettings, pages: tuple[bytes, ...] = ()
 ) -> SearchProvider:
     if settings.provider == "fixture":
-        return FixtureSearchProvider(settings, pages)
-    return SerpApiSearchProvider(settings)
+        return BudgetedSearch(FixtureSearchProvider(settings, pages))
+    return BudgetedSearch(SerpApiSearchProvider(settings))

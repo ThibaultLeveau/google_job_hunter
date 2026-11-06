@@ -14,6 +14,7 @@ from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, SettingsError
 
 from job_hunter.application.ai import AI, Accounting, AIError, ErrorCode, Limits, Reply
+from job_hunter.infrastructure.provider_budgets import BudgetAccounting
 from job_hunter.settings import ConfigurationError
 
 
@@ -243,7 +244,7 @@ def create_ai(
     return AI(
         provider,
         provider,
-        accounting,
+        BudgetAccounting(accounting, required=settings.provider == "openai"),
         settings.limits,
         settings.chat_model or "fixture-chat-v1",
         settings.embedding_model or "fixture-embedding-v1",

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import Field, model_validator
@@ -75,13 +76,20 @@ class SearchPage(SearchValue):
     usage: SearchUsage
 
 
+class ProviderQuota(SearchValue):
+    search_remaining: int = Field(ge=0)
+    tokens_remaining: int = Field(ge=0)
+    resets_at: datetime
+
+
 class SearchCapability(SearchValue):
     provider: Literal["disabled", "serpapi", "fixture"]
-    status: Literal["disabled", "unconfigured", "configured", "fixture"]
+    status: Literal["disabled", "unconfigured", "configured", "fixture", "quota"]
     max_pages: int
     max_results: int
     page_size: Literal[10] = 10
     parameters: tuple[str, ...] = PARAMETERS
+    quota: ProviderQuota | None = None
 
 
 class SearchError(Exception):
