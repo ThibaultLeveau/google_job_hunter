@@ -600,7 +600,7 @@ around these calls; later explicit retries require fresh budget reservations.
 Source text travels in a JSON data envelope; output still requires feature-specific evidence checks.
 Accounting reserves before each request and records its UUID, configured model, prompt/schema versions,
 schema hash, bounds, known usage (otherwise null), elapsed time and safe error code. Hooks receive no
-source/output text. Hook failures stop execution; atomic budgets/persistence remain #54.
+source/output text. Hook failures stop execution; #54 adds durable atomic budget enforcement.
 Fixtures require an explicit response supplied to the factory; embedding fixtures are deterministic,
 not semantic vectors. Normal tests intercept HTTP and use no credential or paid service.
 The unused LangSmith pytest plugin is disabled; one pinned dependency's Python 3.14 import deprecation
@@ -732,7 +732,7 @@ Committed stages are not rerun, so the next task resumes from their preserved ar
 Delivery is at least once: a crash after a provider response but before commit can repeat the call.
 Handlers must reserve/reconcile user and global budgets before paid calls and use provider
 idempotency where available, including any SDK retries. Search uses bounded per-run attempts;
-atomic user/global search budgets arrive in #54. External adapters require explicit configuration.
+atomic user/global search budgets are enforced by #54. External adapters require explicit configuration.
 Tests inject clock/sleep and jitter, plus deterministic handlers, against real PostgreSQL.
 
 ### Search preview
@@ -1016,7 +1016,7 @@ repeat calls before the unique publication commits (at-least-once delivery), but
 Each completed execution's call records are stored separately from the winning artifact's usage list,
 so concurrent publication retains both executions' known usage. A crash before publication can still
 lose usage evidence; it never establishes zero cost. Model calls hold no database transaction.
-Worker orchestration and global budgets remain #51/#54;
+Worker orchestration and global budgets are provided by #51/#54;
 this issue adds no API, embeddings, metadata extraction or client HTML rendering.
 
 ### Deterministic job chunks
@@ -1049,7 +1049,7 @@ Provider/model/revision identify separate spaces; change the revision when a pro
 Each call embeds at most 16 chunks within the AI input bound, with at most eight batches per execution
 (configurable 1–128). Remaining work is explicit and resumable. Complete batches and known call usage
 publish atomically; failures retain earlier batches, and concurrent writes reuse immutable vectors.
-An interruption before publication can lose usage evidence; durable budget reservations arrive in #54.
+An interruption before publication can lose stage usage evidence; #54 retains durable budget reservations.
 
 Retrieval requires owner, job, cleaning revision and chunk policy. It checks the owner's association
 and current snapshot before embedding the needed private query, then checks them again in the exact
@@ -1084,7 +1084,7 @@ Existing standalone failed artifacts keep their immutable revision semantics.
 safe stage states/errors, task timestamps and dependency revisions. Fetch status stays on the public source.
 Publication rechecks the current snapshot and a reference through a live user/search and non-cancelled run.
 Another live user preserves shared work; otherwise late results fail. Database errors use bounded retries.
-Provider I/O holds no transaction. Pre-publication crashes can repeat calls or lose accounting; budgets remain #54.
+Provider I/O holds no transaction. Pre-publication crashes can repeat calls; #54 retains uncertain spend.
 
 With `TEST_DATABASE_URL` configured, run the real-queue fixture end to end:
 `uv run --directory backend --locked pytest --require-database tests/test_pipeline.py -q`.
@@ -1109,7 +1109,7 @@ Artifacts and known call records publish atomically and are immutable, keyed by 
 model/configuration/prompt/schema digest. Concurrent deliveries retain their known call usage while
 reusing one artifact; changed sources/configuration create new artifacts. Failures are explicit and
 cached for that revision, with all fields unknown. A crash before publication can lose usage evidence.
-Calls run outside database transactions; durable budgets and stage orchestration remain #54/#51.
+Calls run outside database transactions; #54/#51 provide durable budgets and stage orchestration.
 This internal stage adds no job endpoint, requirements extraction or derived salary estimates.
 
 ### Full application requirements and bounded summaries
@@ -1131,7 +1131,7 @@ with an explicit offset is normalized to UTC. Missing/ambiguous dates or timezon
 Immutable artifacts and known call records publish atomically, unique by metadata revision plus
 model/configuration/prompt/schema version. Repeated/concurrent delivery reuses artifacts; changes
 create new versions. Failed results are cached for that revision; pre-publication crashes can lose
-usage evidence. Stage orchestration and durable budgets remain #51/#54; no application is submitted.
+usage evidence. #51/#54 provide stage orchestration and durable budgets; no application is submitted.
 
 ### Evidence-backed profile fit
 
@@ -1176,7 +1176,7 @@ with known usage records. Duplicate deliveries reuse one artifact while retainin
 `run` reuses its default generation, including failures; only an explicit internal generation evaluates
 again. `get` exposes owned history, including stale attempts, while denying removed associations.
 Issue #53 adds scheduling, status selection, task fencing and budgeted user reevaluation below;
-the storage service itself provides no endpoint or retry loop. Unified budgets remain #54.
+the storage service itself provides no endpoint or retry loop. #54 enforces unified worker budgets.
 
 ### Private match scheduling
 
@@ -1189,8 +1189,8 @@ for matching-policy changes. Public analysis stays shared; each evaluation captu
 The internal status service distinguishes pending, current, stale history and failed evaluations.
 `request(owner, job, key)` reserves one of three reevaluations per owner per rolling 24 hours and
 enqueues in the same transaction; exhaustion returns `None`. Repeating an owned idempotency key
-returns its original task without another charge, including after a profile change. Provider-wide
-token/cost reservations remain #54. Publication rechecks live ownership, source/profile versions,
+returns its original task without another charge, including after a profile change. #54 enforces
+provider-wide token reservations. Publication rechecks live ownership, source/profile versions,
 latest requested generation and the worker lease; rejected completions cannot replace current
 results. Failed evaluations require an explicit budgeted request. Fixture matching reports unknown
 fit. Job HTTP endpoints and the explanation interface remain subsequent roadmap issues.
@@ -1214,8 +1214,31 @@ while retaining their full charge. Late verified usage may still reduce that ori
 `availability` is an advisory minimum across applicable scopes with a UTC reset time; only the
 atomic reservation decides admission. Internal records contain counters/IDs, not provider payloads.
 Owner/run deletion anonymizes reservation references while preserving global accounting.
-Provider dispatch, shared-public-work charging policy and authenticated API quota fields are
-integrated by #54; this prerequisite alone does not enable budget enforcement in worker calls.
+
+Issue #54 enforces these reservations in worker search, profile extraction, public analysis and
+private matching handlers. Each search page reserves one request before dispatch; each AI call,
+including a repair or embedding batch, reserves its conservative input plus maximum output tokens.
+Known usage refunds unused capacity; timeouts, crashes and missing usage retain the full ceiling.
+Workers expire abandoned reservations in bounded batches without releasing uncertain spend.
+Provider calls hold no database transaction; retries obtain fresh reservations and stay within
+existing stage/task attempt limits. A database/accounting failure prevents further dispatch.
+
+Search charges the authenticated run's owner, run and global daily counters. Profile extraction
+charges its document owner and the global counter. Private matching charges its owner, global
+counter and oldest live owned run associated with the canonical job (creation time, then UUID).
+Shared public-job analysis charges only the global counter, independent of any private initiator.
+Reused public artifacts make no model calls and incur no additional token charge. This policy does
+not store private initiators or profile/search text on public artifacts or in budget records.
+
+Authenticated `GET /api/v1/searches/provider` includes advisory `quota.search_remaining`,
+`quota.tokens_remaining` and UTC `quota.resets_at` for the session owner and global limits.
+Zero means exhausted; a particular run or a call's upper bound can still deny admission earlier.
+Quota denial uses the existing safe `quota` failure code; unavailable accounting returns a safe
+503 response. Existing provider availability, usage, task timing/retry and redacted logging fields
+remain in use. Disabled/unconfigured providers make no external calls or budget reservations.
+Configured paid providers reject calls outside a worker charge scope. Fixtures obey budgets inside
+workers; isolated adapter tests can still use fixtures without a scope. API and worker processes
+must use the same budget settings. Raising a limit does not erase previously charged usage.
 
 ### Search provider
 
@@ -1234,7 +1257,7 @@ are sent. [Google organic pagination](https://serpapi.com/blog/filtering-google-
 uses up to ten results per call and `start` offsets; the obsolete `num` parameter is omitted.
 Zero-based page indexes and result slots are capped; next-page URLs are validated but never followed
 or returned. The adapter makes one request per fetch, with no redirects, environment proxies or retries,
-an overall deadline and a bounded, uncompressed JSON response. Durable orchestration/budgets are later work.
+an overall deadline and a bounded, uncompressed JSON response. #39/#54 add orchestration and budgets.
 
 Results retain title, optional snippet, source URL and absolute rank; snippets are unverified text.
 Malformed entries and credential-bearing URLs are skipped. Missing organic results with successful

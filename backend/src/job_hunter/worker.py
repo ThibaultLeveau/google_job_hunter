@@ -15,6 +15,7 @@ from job_hunter.infrastructure.accounts import (
     load_mail_settings,
 )
 from job_hunter.infrastructure.ai import create_ai, load_ai_settings
+from job_hunter.infrastructure.budgets import PostgresBudgets, load_budget_settings
 from job_hunter.infrastructure.crawl_policy import CrawlPolicyStore, PoliteFetcher
 from job_hunter.infrastructure.crawling import PostgresCrawler
 from job_hunter.infrastructure.database import Database
@@ -29,6 +30,7 @@ from job_hunter.infrastructure.fetching import HttpFetcher, load_fetch_settings
 from job_hunter.infrastructure.match_scheduling import create_schedule
 from job_hunter.infrastructure.parsing import IsolatedParser
 from job_hunter.infrastructure.pipeline import create_pipeline
+from job_hunter.infrastructure.provider_budgets import ProviderBudgets
 from job_hunter.infrastructure.recovery import PostgresRecovery
 from job_hunter.infrastructure.search_provider import (
     create_search_provider,
@@ -130,6 +132,13 @@ def main() -> None:
                     extraction.enqueue,
                 ).handlers()
             )
+        handlers = ProviderBudgets(
+            PostgresBudgets(database, load_budget_settings(), clock.now),
+            extraction.stage.kind,
+            set(pipeline.kinds.values()),
+            search_enabled=search_provider.capability.status
+            in {"configured", "fixture"},
+        ).handlers(handlers)
         with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
             logging.getLogger(__name__).info("Worker started.")
             Worker(

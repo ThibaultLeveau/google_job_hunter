@@ -41,6 +41,7 @@ from job_hunter.infrastructure.accounts import (
     PostgresSessions,
 )
 from job_hunter.infrastructure.ai import create_ai, load_ai_settings
+from job_hunter.infrastructure.budgets import PostgresBudgets, load_budget_settings
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.documents import (
     LocalStorage,
@@ -122,6 +123,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.allowed_origins = config.allowed_origins
     app.state.search_provider = create_search_provider(load_search_settings())
+    budget_settings = load_budget_settings()
+    app.state.provider_budgets = (
+        PostgresBudgets(database, budget_settings, lambda: datetime.now(UTC))
+        if database is not None
+        else None
+    )
     app.state.search_allowed_domains = config.search_allowed_domains
     app.state.searches = (
         PostgresSearches(
