@@ -1228,6 +1228,33 @@ run IDs return 404; invalid filters return 422 and unavailable storage returns a
 Job query strings are removed from the transport scope used by application-server access logs;
 configure upstream proxies to omit query strings as well.
 
+### Jobs page
+
+`/jobs` shows owner-scoped discoveries, 20 per page, newest first. Cards retain long
+job titles and present company, location, work arrangement, salary units, source
+fetch time and match availability. Unknown facts stay explicit; zero values remain
+visible. Salaries are not converted or annualized. Earlier evaluations carry a
+stale label and display assessed requirement weight separately from match score.
+
+Backend cursors remain in the URL. Previous-page navigation uses cursor history;
+a directly opened page can return to the first page. Same-owner cached pages and
+scroll positions support browser return; account changes discard private results,
+positions and pending requests. Loading skeletons, empty pages, expired cursors,
+refresh failures and retries have explicit states. Empty lists can be refreshed.
+
+Title links establish `/jobs/{job_id}` with list `returnTo` context. The dedicated
+detail route/content belongs to #59; until then those links reach the existing
+not-found view. The original posting link opens the public source in a new tab.
+Advanced filter controls belong to #58.
+
+Validation uses a real API, worker and isolated PostgreSQL database with 21 fixture
+discoveries, factual and unknown metadata, and stale private matches. The keyboard
+pass covers skip-to-main, Tab to refresh and row links, Enter activation, pagination,
+back navigation and recovery from an expired cursor. Layouts are checked at
+320/768/1440px and 100%/200% text size, with reduced motion and accessibility scans.
+Representative [desktop](docs/validation/issue-57-desktop.jpg) and
+[mobile](docs/validation/issue-57-mobile.jpg) captures show the list and a long title.
+
 ### Job details and retry actions
 
 `GET /api/v1/jobs/{job_id}` returns preserved source paragraphs, clean text,

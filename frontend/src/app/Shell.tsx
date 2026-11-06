@@ -9,6 +9,7 @@ import { Recovery } from '../features/auth/Recovery';
 import { Verification, VerificationRequired } from '../features/auth/Verification';
 import { Profile } from '../features/profile/Profile';
 import { Searches } from '../features/searches/Searches';
+import { Jobs } from '../features/jobs/Jobs';
 import { authRoutes, safeReturnPath, sessionNotice, workspaceRoutes } from './routes';
 
 function FatalPage() {
@@ -126,6 +127,7 @@ export function Shell() {
             {workspaceRoutes.map(route => <Route key={route.path} path={route.path} element={
               route.path === '/profile' ? <Profile key={user?.id} ownerId={user?.id ?? ''} /> :
               route.path === '/searches' ? <Searches key={user?.id} ownerId={user?.id ?? ''} /> :
+              route.path === '/jobs' ? <Jobs key={user?.id} ownerId={user?.id ?? ''} /> :
               <StatePanel state="empty" title={`${route.label} tools are not available yet`}
                 description="This section will hold your workspace tools when they are available." />
             } />)}

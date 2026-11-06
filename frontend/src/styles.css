@@ -474,3 +474,49 @@ section {
 .search-editor summary { cursor: pointer; padding-block: var(--space-2); }
 .search-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); padding: var(--space-3); background: var(--color-accent-soft); border-radius: var(--radius-control); }
 .search-preview dd { margin-inline-start: var(--space-4); overflow-wrap: anywhere; }
+
+.jobs-toolbar, .job-card-heading, .job-source, .jobs-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.jobs-toolbar { margin-block: var(--space-6); }
+.jobs-toolbar h2, .job-card h2 { margin-bottom: var(--space-1); }
+.jobs-toolbar p, .job-company, .job-facts { margin: 0; }
+.jobs-toolbar p, .job-source, .job-facts dt, .job-note { color: var(--color-muted); font-size: var(--text-sm); }
+.job-list { display: grid; gap: var(--space-4); padding: 0; list-style: none; }
+.job-card, .job-skeleton {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface);
+  padding: var(--space-6);
+  min-width: 0;
+}
+.job-card:focus-within { border-color: var(--color-accent); }
+.job-card-heading { align-items: start; }
+.job-card-heading > div { flex: 1 1 20rem; min-width: 0; }
+.job-card-heading .ui-badge { flex-shrink: 0; }
+.job-card h2 a { text-decoration-thickness: 1px; text-underline-offset: .2em; }
+.job-card h2 a:hover { text-decoration-thickness: 2px; }
+.job-facts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); padding-block: var(--space-6); }
+.job-facts > div { min-width: 0; }
+.job-facts dt { font-weight: 650; }
+.job-facts dd { margin: var(--space-1) 0 0; }
+.job-note { display: block; margin-top: var(--space-1); }
+.job-source { border-top: 1px solid var(--color-border); padding-top: var(--space-3); }
+.jobs-pagination { margin-block: var(--space-6); }
+.jobs-pagination > span { font-size: var(--text-sm); }
+.jobs-loading { margin-block: var(--space-6); }
+.job-skeleton { display: grid; gap: var(--space-4); margin-block: var(--space-4); }
+.job-skeleton span { height: 1rem; background: var(--color-disabled); border-radius: var(--radius-control); }
+.job-skeleton span:first-child { width: 65%; height: 1.5rem; }
+.job-skeleton span:last-child { width: 45%; }
+@media (max-width: 40rem) {
+  .job-card, .job-skeleton { padding: var(--space-4); }
+  .job-facts { grid-template-columns: 1fr; }
+  .job-source { align-items: start; flex-direction: column; }
+  .jobs-pagination { justify-content: start; }
+  .jobs-pagination > span { order: 3; flex-basis: 100%; }
+}

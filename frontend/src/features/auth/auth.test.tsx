@@ -69,7 +69,7 @@ test('supports password visibility, keyboard login and a safe return path', asyn
   await user.click(screen.getByRole('button', { name: 'Hide password' }));
   expect(password).toHaveAttribute('type', 'password');
   password.focus(); await user.keyboard('{Enter}');
-  expect(await screen.findByText('Jobs tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('No discoveries yet')).toBeVisible();
   expect(window.location.pathname).toBe('/jobs');
 });
 
@@ -297,7 +297,7 @@ test.each([
 test('refreshes a successful Google callback before opening the validated saved workspace', async () => {
   sessionStorage.setItem('job-hunter.google-return', '/jobs?filter=saved'); current = { ...owner, email_verified: true };
   mount('/login#google=signed_in');
-  expect(await screen.findByText('Jobs tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('No discoveries yet')).toBeVisible();
   expect(window.location.pathname + window.location.search).toBe('/jobs?filter=saved');
   expect(window.location.hash).toBe('');
 });
@@ -454,6 +454,6 @@ test('continues email sign-in to the saved workspace after a cancelled Google at
   const user = userEvent.setup(); login(true); sessionStorage.setItem('job-hunter.google-return', '/jobs');
   mount('/login#google=cancelled'); await screen.findByText('Google sign-in was cancelled');
   await fill(user); await user.keyboard('{Enter}');
-  expect(await screen.findByText('Jobs tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('No discoveries yet')).toBeVisible();
   expect(window.location.pathname).toBe('/jobs');
 });
