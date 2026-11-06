@@ -13,6 +13,7 @@ from job_hunter.infrastructure.accounts import (
     SmtpMail,
     load_mail_settings,
 )
+from job_hunter.infrastructure.ai import load_ai_settings
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.documents import (
     DocumentParsing,
@@ -41,6 +42,7 @@ def main() -> None:
     )
     parser.add_argument("--concurrency", type=int, choices=range(1, 17), default=2)
     args = parser.parse_args()
+    load_ai_settings()
     stop = Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda _signal, _frame: stop.set())

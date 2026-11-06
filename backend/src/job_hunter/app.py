@@ -38,6 +38,7 @@ from job_hunter.infrastructure.accounts import (
     PostgresAuthCounter,
     PostgresSessions,
 )
+from job_hunter.infrastructure.ai import load_ai_settings
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.documents import (
     LocalStorage,
@@ -90,6 +91,7 @@ class ResetPasswordRequest(VerificationRequest):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings if settings is not None else load_settings()
+    load_ai_settings()
     database = Database(config) if config.database_url is not None else None
 
     @asynccontextmanager
