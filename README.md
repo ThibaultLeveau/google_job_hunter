@@ -1058,6 +1058,27 @@ chunk index and UUID. Source/model/policy changes select separate artifacts, pre
 evidence. Query text/vectors stay transient, with accounting returned to the caller instead of stored
 in public tables. There is no private resume index or ANN index. Worker orchestration remains #51.
 
+### Source-verified job metadata
+
+Issue #49 adds `ExtractMetadata` and `PostgresMetadata`, composed by `create_metadata`.
+The bounded typed LangChain call receives every preserved preparation paragraph, including its
+identity and global Unicode offsets. AI-cleaned display text is not a factual input. Inputs that
+exceed the configured AI bound fail explicitly; source text is never silently truncated.
+Exact citations and complete-token values are checked against the immutable preparation. Fields
+carry known, unknown, ambiguous or conflicting status; multiple locations/skills remain separate.
+Work arrangement and geographic eligibility are distinct. Conservative arrangement normalization
+retains unknown for unsupported or negated wording; original-language claims and evidence remain.
+Salary alternatives preserve source text, explicit amounts, ISO currency, period and gross/net basis.
+Missing components stay null; currency symbols and shorthand amounts are not guessed or converted.
+Contradictory salary alternatives remain conflicting. Non-job pages publish no listing facts.
+
+Artifacts and known call records publish atomically and are immutable, keyed by preparation plus
+model/configuration/prompt/schema digest. Concurrent deliveries retain their known call usage while
+reusing one artifact; changed sources/configuration create new artifacts. Failures are explicit and
+cached for that revision, with all fields unknown. A crash before publication can lose usage evidence.
+Calls run outside database transactions; durable budgets and stage orchestration remain #54/#51.
+This internal stage adds no job endpoint, requirements extraction or derived salary estimates.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
