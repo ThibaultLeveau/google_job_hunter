@@ -14,5 +14,10 @@ test('real stack is healthy and public navigation works', async ({ page, request
   if (process.env.E2E_PROBE === 'outbound') {
     await page.evaluate(async () => { await fetch('https://unexpected.invalid/probe').catch(() => undefined); });
   }
+  if (process.env.E2E_PROBE?.startsWith('redirect')) {
+    const location = process.env.E2E_PROBE === 'redirect-http' ? 'http://203.0.113.1/probe' : 'https://unexpected.invalid/probe';
+    await page.route('**/redirect-probe', route => route.fulfill({ status: 302, headers: { location } }));
+    await page.goto('/redirect-probe').catch(() => undefined);
+  }
   if (process.env.E2E_PROBE === 'failure') throw new Error('Intentional failure after readiness');
 });

@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -226,6 +226,40 @@ def test_cli_lifecycle(tmp_path: Path) -> None:
         original = json.loads(state.read_text())
         assert state.stat().st_mode & 0o777 == 0o600
         assert control(state, "seed", "success")["users"] == original["users"]
+        owner = UUID(original["users"][0]["id"])
+        assert "Développeur" in control(state, "resume", "success")["text"]
+        assert control(state, "dedup", "success", owner) == {
+            "documents": [],
+            "parsed": [],
+            "extractions": [],
+            "proposals": [],
+            "facts": [],
+            "stored_files": 0,
+        }
+        for action, identity in (
+            ("expire", uuid4()),
+            ("dedup", None),
+            ("unknown", owner),
+        ):
+            with pytest.raises(RuntimeError, match="control failed"):
+                control(state, action, "success", identity)
+        with (
+            httpx.Client(
+                base_url=original["api_url"],
+                headers={"Origin": original["api_url"]},
+                trust_env=False,
+            ) as alice,
+            httpx.Client(
+                base_url=original["api_url"],
+                headers={"Origin": original["api_url"]},
+                trust_env=False,
+            ) as bob,
+        ):
+            login(alice)
+            login(bob, "bob@example.org")
+            assert control(state, "expire", "success", owner) == {"expired": True}
+            assert alice.get("/api/auth/me").status_code == 401
+            assert bob.get("/api/auth/me").status_code == 200
         assert control(state, "reset", "duplicate")["scenario"] == "duplicate"
         assert control(state, "stop", "success") == {"stopped": True}
         assert process.wait(timeout=10) == 0

@@ -16,7 +16,7 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-for (const probe of ['outbound', 'failure', 'production'] as const) {
+for (const probe of ['outbound', 'redirect', 'redirect-http', 'failure', 'production'] as const) {
   await test(`${probe} fails and cleans up the real stack`, async () => {
     const directory = mkdtempSync(join(tmpdir(), 'job-hunter-browser-probe-'));
     const state = join(directory, 'state.json');
@@ -31,11 +31,11 @@ for (const probe of ['outbound', 'failure', 'production'] as const) {
         }
       }
       const args = probe === 'production' ? ['e2e/stack.ts']
-        : ['node_modules/@playwright/test/cli.js', 'test', '--reporter=line', '--output', join(directory, 'results')];
+        : ['node_modules/@playwright/test/cli.js', 'test', 'smoke.pw.ts', '--reporter=line', '--output', join(directory, 'results')];
       const result = spawnSync(process.execPath, args, { cwd: frontend, env, encoding: 'utf8', timeout: 240000 });
       assert.ifError(result.error);
       assert.equal(result.status, 1, result.stdout + result.stderr);
-      assert.match(result.stdout + result.stderr, probe === 'outbound' ? /Unexpected external request/
+      assert.match(result.stdout + result.stderr, ['outbound', 'redirect', 'redirect-http'].includes(probe) ? /Unexpected external request/
         : probe === 'failure' ? /Intentional failure after readiness/ : /verify test mode/);
       assert(!existsSync(state), 'Harness state must be removed after failure');
       if (probe !== 'production') {
