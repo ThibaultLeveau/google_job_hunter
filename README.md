@@ -886,6 +886,40 @@ motion enabled and no external requests or page errors. The [desktop history](do
 and [mobile outcomes](docs/validation/issue-42-mobile.jpg) were visually checked. Component tests cover
 double clicks, uncertain retries, fake-clock visibility/terminal polling, HTTP 429 and session changes.
 
+### Public HTTP fetch boundary
+
+Issue #43 adds the synchronous `PublicFetcher.fetch(FetchRequest)` port and `HttpFetcher` adapter.
+It performs one GET hop only. A redirect response contains a validated next request with its visited
+URLs; callers must retain that history and apply robots policy and host pacing before fetching it.
+Those crawler rules and worker wiring arrive in #44. No new API or live crawl is enabled here.
+
+Only HTTP/80 and HTTPS/443 are permitted. Credentials, ambiguous address forms, non-public/mixed DNS
+answers, mapped/transition IPv6 and unsafe redirects fail closed. Azure's special
+[WireServer IP](https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16)
+is explicitly blocked too. Async DNS queries both address
+families without search suffixes; every answer is validated and the connection uses one validated IP.
+HTTP Host, TLS SNI and certificate verification retain the original hostname. Each hop revalidates
+DNS; there is no address fallback, transport retry, automatic redirect, proxy or cookie jar.
+HTTPCore handles HTTP/TLS; gzip decoding has separate wire/body limits and rejects truncated or
+concatenated streams. Other content encodings are unsupported. Returned bytes remain untrusted.
+
+`FetchSettings` reads `JOB_HUNTER_FETCH_` variables: `ALLOWED_PORTS` defaults to JSON `[80,443]`
+(only subsets of those standard ports); `MAX_REDIRECTS=5` (0–10); `CONNECT_SECONDS=5` and
+`READ_SECONDS=5` (0.01–30); `TOTAL_SECONDS=20` (0.01–60, including slot wait and DNS);
+`MAX_WIRE_BYTES=2097152` (up to 8 MiB), `MAX_BODY_BYTES=4194304` (up to 16 MiB), and
+`MAX_CONNECTIONS=4` (1–16). Share one adapter among worker threads to enforce its socket cap;
+each admitted hop owns at most one HTTP connection and bounded DNS work. Response headers are
+limited to 16 KiB. Errors expose only stable codes, transient/permanent classification, HTTP status
+and numeric Retry-After seconds capped at one hour; HTTP-date Retry-After is left unknown.
+
+Tests use the reusable injected `backend/tests/http_fixture.py` transport and resolver; URL and
+address validation still run, with no production bypass setting. They cover rebinding, redirects,
+compression bombs, deadlines, concurrent slots, proxy variables and redacted logs. A loopback TLS
+server with an ephemeral test certificate verifies the original hostname and rejects a mismatch;
+only its test transport maps a validated public IP to that server. No external network is required.
+The boundary follows [OWASP's SSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
+and [HTTPCore's network-backend contract](https://www.encode.io/httpcore/network-backends/).
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
