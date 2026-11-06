@@ -1771,19 +1771,37 @@ npm run test:e2e
 npm run test:e2e:guards
 ```
 
-The first check builds the production UI and runs one Chromium health/navigation smoke with the
-real API, worker, queue and database. Playwright starts #66's harness and a local preview proxy,
+The first check builds the production UI and runs Chromium journeys with the real API, worker,
+queue and database. Playwright starts #66's harness and a local preview proxy,
 waits for readiness, resets private test data before each test and tears down the stack afterward.
 It never reuses a running server. `E2E_PORT` defaults to 4175; simultaneous runs need distinct
 ports. Each run generates a private state path; `E2E_STATE` can specify a new path explicitly.
 No provider credentials, alternate application routes or browser-only API mocks are involved.
 
-The three guard probes deliberately fail a browser request, fail after readiness, and supply
+The five guard probes deliberately fail a direct request and external HTTPS/HTTP redirects, fail after readiness, and supply
 production provider settings. They pass only when the expected failure is reported; the browser
 probes also verify that the API, temporary files and isolated database disappear. All browser
-HTTP requests must remain on the local origin; unexpected requests, WebSockets and page errors
-fail even if the UI catches them. Service workers are blocked. Future journeys reuse the private
-`control` helper for mail/OIDC observations and the existing scenario option.
+HTTP requests must remain on the local frontend/API origins; unexpected requests, WebSockets and page errors
+fail even if the UI catches them. A local allowlist proxy also blocks redirect chains, which
+Playwright's route handler does not intercept after the first request. Service workers are blocked.
+Future journeys reuse the private `control` helper and the existing scenario option. The Google
+journey fetches the real OAuth-start response without following redirects, then passes its authorization
+URL through the private signed-identity fixture and returns to the real backend callback.
+No request reaches Google; state, nonce, PKCE, token validation and session creation remain real.
+
+Issue #68 covers registration and email verification, password sign-in/protected navigation/sign-out,
+password recovery, actual server-side session expiry, and synthetic Google sign-in. Profile journeys
+upload the existing tiny multilingual resume fixture, wait for durable parsing/extraction, inspect
+source evidence and unknown dates, accept candidates and edit an accepted fact. Identical re-upload
+and normalized skill insertion verify deduplication through visible outcomes, API IDs and owner-scoped
+database IDs/counts. Separate journeys cover stale-review reload with retained selections and malformed
+TXT rejection. Each journey starts with reset data; Playwright retries remain disabled.
+
+Private harness commands `resume`, `expire --owner UUID`, and `dedup --owner UUID` supply the existing
+resume text, expire a seeded owner's sessions, and inspect deduplication artifacts respectively.
+They use the private state-file command channel, accept only seeded owners for stateful operations,
+and expose no HTTP routes or production configuration. The guard probes run only `smoke.pw.ts`;
+full journey repetition uses two separate `npm run test:e2e` invocations to verify clean startup.
 
 `Browser quality` runs the checks in unprivileged GitHub Actions with a disposable pgvector
 service, pinned actions and bounded startup/test/shutdown deadlines. Its Ubuntu runner already

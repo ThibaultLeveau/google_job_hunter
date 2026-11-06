@@ -8,26 +8,35 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 from types import TracebackType
 from typing import Any, Self
 from urllib.parse import parse_qs, urlencode, urlsplit
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import httpx
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text, update
 from stack_fixtures import EMAILS, PASSWORD, Scenario, StackConfig, write_private
+from test_extraction import TEXT
 
 from job_hunter.infrastructure.accounts import (
     Argon2Passwords,
     AuthIdentityRecord,
+    SessionRecord,
     UserRecord,
 )
 from job_hunter.infrastructure.database import Base, Database
+from job_hunter.infrastructure.documents import (
+    DocumentRecord,
+    ExtractionRecord,
+    ParsedDocumentRecord,
+    ProposalRecord,
+)
+from job_hunter.infrastructure.profiles import ProfileFactRecord
 from job_hunter.settings import Settings
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -203,6 +212,59 @@ class Stack:
                 time.sleep(0.05)
         raise RuntimeError("Harness health deadline exceeded")
 
+    def browser_control(self, action: str, owner: UUID | None) -> dict[str, object]:
+        if action == "resume":
+            return {"text": TEXT}
+        if owner not in {uuid5(NAMESPACE_URL, email) for email in EMAILS}:
+            raise ValueError("Select a seeded synthetic owner")
+        with self.db.transaction() as session:
+            if action == "expire":
+                now = datetime.now(UTC)
+                session.execute(
+                    update(SessionRecord)
+                    .where(SessionRecord.user_id == owner)
+                    .values(
+                        authenticated_at=now - timedelta(days=2),
+                        expires_at=now - timedelta(days=1),
+                    )
+                )
+                return {"expired": True}
+            if action != "dedup":
+                raise ValueError("Unknown browser control")
+            documents = select(DocumentRecord.id).where(
+                DocumentRecord.owner_id == owner
+            )
+            parsed = select(ParsedDocumentRecord.id).where(
+                ParsedDocumentRecord.document_id.in_(documents)
+            )
+            extractions = select(ExtractionRecord.id).where(
+                ExtractionRecord.parsed_id.in_(parsed)
+            )
+            statements = {
+                "documents": documents,
+                "parsed": parsed,
+                "extractions": extractions,
+                "proposals": select(ProposalRecord.id).where(
+                    ProposalRecord.extraction_id.in_(extractions)
+                ),
+                "facts": select(ProfileFactRecord.id).where(
+                    ProfileFactRecord.owner_id == owner
+                ),
+            }
+            result: dict[str, object] = {
+                name: sorted(str(identity) for identity in session.scalars(statement))
+                for name, statement in statements.items()
+            }
+            keys = session.scalars(
+                select(DocumentRecord.storage_key).where(
+                    DocumentRecord.owner_id == owner
+                )
+            )
+            result["stored_files"] = sum(
+                (self.root / "documents" / (key + ".blob")).is_file() for key in keys
+            )
+            return result
+
     def halt(self) -> None:
         for child in self.children:
             if child.poll() is None:
@@ -279,13 +341,20 @@ def authorize(root: Path, url: str) -> str:
     )
 
 
-def control(state_file: Path, action: str, scenario: Scenario) -> dict[str, Any]:
+def control(
+    state_file: Path, action: str, scenario: Scenario, owner: UUID | None = None
+) -> dict[str, Any]:
     if action == "stop" and not state_file.exists():
         return {"stopped": True}
     root = Path(json.loads(state_file.read_text())["root"])
     identity = uuid4().hex
     write_private(
-        root / "commands" / f"{identity}.json", {"action": action, "scenario": scenario}
+        root / "commands" / f"{identity}.json",
+        {
+            "action": action,
+            "scenario": scenario,
+            "owner": str(owner) if owner else None,
+        },
     )
     reply = root / "replies" / f"{identity}.json"
     deadline = time.monotonic() + 60
@@ -309,7 +378,18 @@ def main() -> None:
         description="Isolated test stack; no production fixture routes."
     )
     parser.add_argument(
-        "action", choices=("start", "seed", "reset", "stop", "mail", "authorize")
+        "action",
+        choices=(
+            "start",
+            "seed",
+            "reset",
+            "stop",
+            "mail",
+            "authorize",
+            "resume",
+            "expire",
+            "dedup",
+        ),
     )
     parser.add_argument("--mode", choices=("test",), default=None)
     parser.add_argument("--state", type=Path, required=True)
@@ -321,6 +401,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--frontend-url", default="http://127.0.0.1:5173")
     parser.add_argument("--url")
+    parser.add_argument("--owner", type=UUID)
     args = parser.parse_args()
     try:
         if args.action == "start":
@@ -347,17 +428,30 @@ def main() -> None:
                             if data["action"] == "stop":
                                 stop.set()
                                 break
-                            result = (
-                                stack.seed()
-                                if data["action"] == "seed"
-                                else stack.reset(data["scenario"])
-                            )
+                            try:
+                                if data["action"] in ("seed", "reset"):
+                                    result = (
+                                        stack.seed()
+                                        if data["action"] == "seed"
+                                        else stack.reset(data["scenario"])
+                                    )
+                                else:
+                                    result = stack.browser_control(
+                                        data["action"],
+                                        UUID(data["owner"])
+                                        if data.get("owner")
+                                        else None,
+                                    )
+                            except ValueError:
+                                result = {"error": "Invalid fixture control"}
                             write_private(args.state, stack.info())
                             write_private(stack.root / "replies" / request.name, result)
             finally:
                 args.state.unlink(missing_ok=True)
-        elif args.action in ("seed", "reset", "stop"):
-            print(json.dumps(control(args.state, args.action, args.scenario)))
+        elif args.action in ("seed", "reset", "stop", "resume", "expire", "dedup"):
+            print(
+                json.dumps(control(args.state, args.action, args.scenario, args.owner))
+            )
         else:
             root = Path(json.loads(args.state.read_text())["root"])
             value = (

@@ -27,7 +27,7 @@ export async function readState(): Promise<StackState> {
   return JSON.parse(await readFile(statePath(), 'utf8')) as StackState;
 }
 
-export async function control(action: 'reset' | 'seed' | 'mail' | 'authorize', ...args: string[]): Promise<unknown> {
+export async function control(action: 'reset' | 'seed' | 'mail' | 'authorize' | 'resume' | 'expire' | 'dedup', ...args: string[]): Promise<unknown> {
   const result = await execute(python, [harness, action, '--state', statePath(), ...args], { timeout: 75000 });
   return JSON.parse(result.stdout) as unknown;
 }
