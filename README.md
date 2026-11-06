@@ -1133,6 +1133,33 @@ model/configuration/prompt/schema version. Repeated/concurrent delivery reuses a
 create new versions. Failed results are cached for that revision; pre-publication crashes can lose
 usage evidence. Stage orchestration and durable budgets remain #51/#54; no application is submitted.
 
+### Evidence-backed profile fit
+
+Issue #52 adds `EvaluateMatch`, composed by `create_matcher`, for accepted `ProfileSnapshot`
+values and validated, versioned `MatchJob` inputs. The caller supplies owned database snapshots;
+this internal evaluator exposes no HTTP endpoint. Job association/current-content checks bracket
+provider work. Every requirement and its full citations enter the bounded LangChain call, even
+when vectors are incomplete. Top-five job-scoped passages supplement that evidence; only the
+retrieval query is shortened (1,800 characters), never requirements or accepted professional facts.
+Oversized inputs fail explicitly. Calls allow one query embedding and at most two schema attempts.
+
+The model receives skill names, experience titles and professional descriptions with fact IDs.
+Company/project names, URLs, calendar dates, owner identifiers and document provenance are omitted;
+tenure must be explicitly described, not inferred from omitted dates. Free text remains untrusted.
+The prompt excludes protected traits and treats contradictory experience and unsupported fit
+conservatively. Evidence membership is validated; semantic judgments remain model interpretations.
+Duplicate/missing requirement evaluations, foreign citations and unsupported profile IDs fail closed.
+Matched/partial need profile support; missing/unknown permit empty support without invented facts.
+
+Rubric `explicit-fit-v1` weights required job conditions 2 and preferred/unclear conditions 1.
+Matched earns full weight, partial half, missing zero; unknowns leave the assessed denominator.
+Materials/instructions/deadlines remain unknown with zero score weight. The result exposes each
+component, unknown count/weight and weighted assessed coverage; all-unknown/no-condition results
+have a null score. Scores round half-up to two decimals and never establish hiring eligibility.
+Profile, source, requirements, chunk, embedding, model, prompt and rubric revisions accompany results.
+Known usage records contain no raw inputs. Private persistence, scheduling and publication fencing
+are delivered by #53; durable budget reservation is #54. No profile facts are changed.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
