@@ -508,7 +508,7 @@ Configure integer environment variables with the `JOB_HUNTER_RETENTION_` prefix:
 | `ARTIFACT_DAYS` | 30 | Snapshot age, with the protections described below |
 | `BATCH_SIZE` | 20 | Candidates per invocation, range 1–100 |
 
-Hour limits are 0–87600 except the stated positive minima; artifact days are 1–3650.
+Hour limits are 0–87600; file/task/retry hours require at least 1. Artifact days are 1–3650.
 Counts identify primary records processed; token deletion also removes its at-most-one
 encrypted delivery payload. Files use inode locks and recheck every committed reference,
 including tombstones. Directory enumeration uses bounded memory; its time depends on the
