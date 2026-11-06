@@ -441,3 +441,14 @@ section {
 .document-upload input::file-selector-button { min-height: 44px; font: inherit; margin-inline-end: var(--space-2); }
 .document-upload .ui-button { justify-self: start; }
 .document-confirm { border-inline-start: 3px solid var(--color-border); padding-inline-start: var(--space-3); }
+
+.proposal-review { margin-block: var(--space-4); }
+.proposal-review h4, .proposal-review h5 { font-size: var(--text-lg); margin-block: var(--space-3); }
+.proposal-choice { display: flex; align-items: center; gap: var(--space-3); min-height: 44px; }
+.proposal-choice input { width: 1.25rem; height: 1.25rem; flex: none; accent-color: var(--color-accent); }
+.proposal-review dt, .proposal-evidence dt { font-weight: 600; }
+.proposal-review dd, .proposal-evidence dd { margin: var(--space-2) 0 var(--space-4); white-space: pre-wrap; }
+.proposal-evidence figure { margin: var(--space-2) 0; border-inline-start: 3px solid var(--color-border); padding-inline-start: var(--space-3); }
+.proposal-evidence blockquote { margin: 0; }
+.proposal-evidence figcaption { font-size: var(--text-sm); }
+.proposal-review summary { cursor: pointer; padding-block: var(--space-2); }

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import type { components } from '../../../generated/api';
 import { api, ApiError } from '../../shared/api';
 import { Badge, Button } from '../../shared/ui';
+import { ProposalReview } from '../profile/ProposalReview';
 
 type Document = components['schemas']['Document'];
 type Deletion = components['schemas']['DeletionState'];
@@ -67,6 +68,7 @@ function DocumentRow({ document: original, ownerId, retain, dismiss }: {
     refetchInterval: query => !query.state.error && active.has(query.state.data?.status ?? '') ? 5000 : false,
   });
   const [confirming, setConfirming] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   const busy = useRef(false);
@@ -78,6 +80,9 @@ function DocumentRow({ document: original, ownerId, retain, dismiss }: {
       void api.queryClient.cancelQueries({ queryKey: key });
       void api.queryClient.cancelQueries({ queryKey: extractionKey });
       api.queryClient.removeQueries({ queryKey: extractionKey });
+      const reviewKey = [...prefix, 'review', original.id];
+      void api.queryClient.cancelQueries({ queryKey: reviewKey });
+      api.queryClient.removeQueries({ queryKey: reviewKey });
       api.queryClient.setQueryData(key, result);
       // Remove deleted evidence immediately even if refreshing the profile fails.
       const profileKey = ['profile', ownerId];
@@ -110,6 +115,11 @@ function DocumentRow({ document: original, ownerId, retain, dismiss }: {
           {extraction.data.status === 'ready' && ` · ${String(extraction.data.count)} candidates · Language: ${extraction.data.language}. Accepted facts change only after review.`}</p>
           : <p>Loading extraction status…</p>}
     </div>}
+    {!removed && extraction.data?.status === 'ready' && <>
+      <Button tone="secondary" aria-expanded={reviewing} onClick={() => { setReviewing(previous => !previous); }}>
+        {reviewing ? 'Close review' : 'Review candidates'}</Button>
+      {reviewing && <ProposalReview ownerId={ownerId} documentId={original.id} filename={original.filename} />}
+    </>}
     {deletion.isError && <p role="alert">Deletion could not be confirmed. Try again to check or resume deletion.</p>}
     {removed ? <>
       <p>Your accepted facts are kept; evidence from this document is unavailable.</p>

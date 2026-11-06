@@ -407,7 +407,7 @@ Writes use the current profile revision and invalidate its query; conflicts pres
 an explicit reload/review before retrying. Failed refreshes keep visible facts marked out of date and block
 writes. Account changes clear cached facts and remount the form; late responses cannot restore old data.
 Changed accepted facts require job evaluations to refresh; evaluation processing is implemented later.
-Document upload/review controls remain in their separate issues.
+Document upload and candidate review appear below the accepted facts.
 
 Experience/project sections provide create/edit dialogs and explicit removal confirmation. Forms use
 the same fact API, including calendar dates, nullable ongoing status, optional descriptions and safe
@@ -474,6 +474,27 @@ choose existing content or a distinct natural key. Similar project/employment na
 Evidence links retain only fields still supported by immutable source quotes; corrections cannot invent citations.
 Revision advances once per batch that creates facts or adds evidence; rejection/replay alone never advances it.
 
+Choose **Review candidates** on a document whose extraction is complete. Candidates are grouped by
+document, with original-language quotes, source version/locations, uncertain or missing values and
+suggested existing facts. Suggestions compare normalized identifying values; the server remains the
+authority for exact linking/conflicts, including Unicode casefolding and differing descriptions.
+Select up to 100 candidates across pages, optionally correct them with the shared skill/experience/project
+editors, then explicitly accept or reject. Keeping a draft alone never changes accepted facts.
+Created/linked/rejected results are shown per candidate; conflicts keep their selections and corrections.
+Stale revisions require explicit reload/review before another submission. Unconfirmed results lock the
+captured decisions and offer an identical retry with the same idempotency key, including after a lost response.
+Choices/drafts survive recoverable errors and pagination; closing review discards local choices and receipts.
+The proposals API includes previously decided candidates. Reopening does not infer historical decisions:
+the server replays identical choices or reports conflicting ones. Account changes abort private requests;
+document deletion also cancels an open review and removes its cached proposals.
+
+Issue #34 browser validation used the real API/worker/PostgreSQL with fixture extraction: keyboard review,
+shared draft editing, exact duplicate linking, acceptance/rejection, stale revision recovery and account
+isolation passed. PostgreSQL retained four accepted facts and four supported evidence spans at revision three.
+All six 320/768/1440px and 100/200% text-scale layouts passed overflow and axe checks, with reduced motion,
+native dialog Escape and focus recovery. See [desktop review](docs/validation/issue-34-desktop.jpg) and
+[mobile draft editor](docs/validation/issue-34-mobile.jpg). No paid providers or unexpected external requests ran.
+
 ### Private document uploads
 
 The profile page provides a keyboard-accessible PDF/DOCX/TXT picker and drop zone, explicit upload
@@ -486,7 +507,7 @@ Unmounting or switching accounts aborts requests and stops timers; private cache
 Downloads use the authorized API. Deletion requires confirmation, preserves accepted facts, immediately
 removes cached source quotes and follows cleanup until completion; failed cleanup can be resumed.
 The UI explains scanned/encrypted/invalid files and unavailable extraction. It does not parse files in
-the browser or review proposals; failed parsing requires a corrected/different file or manual facts.
+the browser; failed parsing requires a corrected/different file or manual facts.
 
 Issue #33 browser validation used the real API, worker and PostgreSQL with fixture extraction: keyboard
 file selection/upload, TXT/DOCX/scanned PDF handling, duplicate feedback, invalid-content recovery,
