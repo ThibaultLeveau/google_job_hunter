@@ -1195,6 +1195,28 @@ latest requested generation and the worker lease; rejected completions cannot re
 results. Failed evaluations require an explicit budgeted request. Fixture matching reports unknown
 fit. Job HTTP endpoints and the explanation interface remain subsequent roadmap issues.
 
+### Provider budget ledger
+
+Approved prerequisite [#136](https://github.com/ThibaultLeveau/google_job_hunter/issues/136)
+adds `PostgresBudgets` and migration `0030_provider_budgets`. Limits use UTC calendar days
+and integer search requests or combined AI/embedding tokens, with no currency conversion.
+`JOB_HUNTER_BUDGET_SEARCH` and `JOB_HUNTER_BUDGET_TOKENS` accept JSON objects containing
+`global_daily`, `owner_daily` and `run_daily` nonnegative integers (maximum 1,000,000,000,000).
+Defaults are respectively 100/20/10 requests and 1,000,000/100,000/50,000 tokens; zero disables
+new reservations in that scope. `JOB_HUNTER_BUDGET_RESERVATION_SECONDS` defaults to 300 (1–3600).
+
+`reserve` commits a unique call ID and its upper bound across global, optional live owner and
+owned search-run counters in a consistent lock order. A quota failure rolls back every scope;
+a duplicate call ID cannot authorize another dispatch. Only dispatch after a successful return.
+`settle` reconciles verified usage once against the original day; missing/invalid usage cannot
+release capacity. `expire` processes bounded pages, marking abandoned reservations unknown
+while retaining their full charge. Late verified usage may still reduce that original charge.
+`availability` is an advisory minimum across applicable scopes with a UTC reset time; only the
+atomic reservation decides admission. Internal records contain counters/IDs, not provider payloads.
+Owner/run deletion anonymizes reservation references while preserving global accounting.
+Provider dispatch, shared-public-work charging policy and authenticated API quota fields are
+integrated by #54; this prerequisite alone does not enable budget enforcement in worker calls.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
@@ -1425,7 +1447,7 @@ Listing an issue here does not authorize implementing it as part of issue #1.
 | 51 | [#51 Connect versioned crawl, analysis, and embedding stages](https://github.com/ThibaultLeveau/google_job_hunter/issues/51) | AI job processing | [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11), [#48](https://github.com/ThibaultLeveau/google_job_hunter/issues/48), [#50](https://github.com/ThibaultLeveau/google_job_hunter/issues/50), approved prerequisite [#129](https://github.com/ThibaultLeveau/google_job_hunter/issues/129) |
 | 52 | [#52 Evaluate profile fit against explicit job requirements](https://github.com/ThibaultLeveau/google_job_hunter/issues/52) | Personalized matching | [#29](https://github.com/ThibaultLeveau/google_job_hunter/issues/29), [#48](https://github.com/ThibaultLeveau/google_job_hunter/issues/48), [#50](https://github.com/ThibaultLeveau/google_job_hunter/issues/50), [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27) |
 | 53 | [#53 Persist private matches and recompute stale evaluations safely](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) | Personalized matching | [#52](https://github.com/ThibaultLeveau/google_job_hunter/issues/52), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39), approved prerequisite [#133](https://github.com/ThibaultLeveau/google_job_hunter/issues/133) |
-| 54 | [#54 Enforce atomic per-user and global provider budgets](https://github.com/ThibaultLeveau/google_job_hunter/issues/54) | Operations and privacy | [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51), [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) |
+| 54 | [#54 Enforce atomic per-user and global provider budgets](https://github.com/ThibaultLeveau/google_job_hunter/issues/54) | Operations and privacy | [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51), [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53), approved prerequisite [#136](https://github.com/ThibaultLeveau/google_job_hunter/issues/136) |
 | 55 | [#55 List discovered jobs with stable pagination and typed filters](https://github.com/ThibaultLeveau/google_job_hunter/issues/55) | Jobs API | [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) |
 | 56 | [#56 Expose job evidence, safe processing status, and authorized retries](https://github.com/ThibaultLeveau/google_job_hunter/issues/56) | Jobs API | [#55](https://github.com/ThibaultLeveau/google_job_hunter/issues/55), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51) |
 | 57 | [#57 Build the responsive job listing with factual summaries](https://github.com/ThibaultLeveau/google_job_hunter/issues/57) | Job interface | [#21](https://github.com/ThibaultLeveau/google_job_hunter/issues/21), [#55](https://github.com/ThibaultLeveau/google_job_hunter/issues/55) |
