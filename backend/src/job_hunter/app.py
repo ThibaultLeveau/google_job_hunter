@@ -16,6 +16,7 @@ from job_hunter.api.documents import router as documents_router
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
 from job_hunter.api.profiles import router as profiles_router
 from job_hunter.api.reauth import FLOW_COOKIE, FLOW_PATH, install_reauthentication
+from job_hunter.api.searches import router as searches_router
 from job_hunter.api.sessions import (
     COOKIE,
     authenticated_user,
@@ -115,6 +116,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         responses={status: {"model": ErrorEnvelope} for status in ERRORS},
     )
     app.state.allowed_origins = config.allowed_origins
+    app.state.search_allowed_domains = config.search_allowed_domains
+    app.include_router(searches_router)
     app.state.sessions = (
         Sessions(
             PostgresSessions(database),
