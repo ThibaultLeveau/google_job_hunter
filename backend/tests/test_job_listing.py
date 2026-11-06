@@ -163,6 +163,16 @@ def test_filters_unknowns_salary_units_and_safe_projection(
         ).analysis_status
         == "failed"
     )
+    url = "https://jobs.example.org/empty"
+    empty = register(db, owners[0], runs[0], url)
+    source = publish(db, empty, FetchedSnapshot(url, url, 200, "text/plain", b" ", NOW))
+    PostgresPreparation(db).run(source.id)
+    assert (
+        next(
+            row for row in listing.list(owners[0], JobQuery()).items if row.id == empty
+        ).analysis_status
+        == "unavailable"
+    )
 
 
 @pytest.mark.parametrize("sort", ["newest", "oldest", "title", "match"])

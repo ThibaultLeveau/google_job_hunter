@@ -32,7 +32,9 @@ WITH owned AS (
     SELECT j.id, j.primary_url AS source_url, o.discovered_at,
         j.last_fetched_at AS fetched_at, j.crawl_observed_at AS observed_at,
         j.crawl_state AS fetch_status, m.payload AS metadata,
-        CASE WHEN req.payload->>'state' IN ('ready','unknown','failed','unavailable')
+        CASE WHEN prep.payload->>'state'='non_job' THEN 'non_job'
+            WHEN prep.payload->>'state' IN ('empty','unsupported') THEN 'unavailable'
+            WHEN req.payload->>'state' IN ('ready','unknown','failed','unavailable')
             THEN req.payload->>'state'
             WHEN m.payload->>'state' IN ('failed','non_job') THEN m.payload->>'state'
             WHEN EXISTS (SELECT 1 FROM tasks t WHERE t.subject_id=j.current_snapshot_id
