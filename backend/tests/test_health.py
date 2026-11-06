@@ -111,6 +111,7 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
         "/api/v1/searches/runs/{run_id}/cancel",
         "/api/v1/searches/{search_id}",
         "/api/v1/searches/{search_id}/runs",
+        "/api/v1/jobs",
         "/api/v1/profile",
         "/api/v1/profile/facts/{fact_id}",
         "/api/v1/profile/facts",

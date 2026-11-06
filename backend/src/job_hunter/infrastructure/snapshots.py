@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Identity,
+    Index,
     LargeBinary,
     String,
     UniqueConstraint,
@@ -80,6 +81,7 @@ class SourceMergeRecord(Base):
     __tablename__ = "job_source_merges"
     __table_args__ = (
         CheckConstraint("old_id <> source_id", name="ck_source_merge_identity"),
+        Index("ix_source_merge_target", "source_id", "old_id"),
     )
     old_id: Mapped[UUID] = mapped_column(primary_key=True)
     source_id: Mapped[UUID] = mapped_column(ForeignKey("job_sources.id"))

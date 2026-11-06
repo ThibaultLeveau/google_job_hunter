@@ -14,6 +14,8 @@ from starlette.responses import RedirectResponse
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.documents import router as documents_router
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
+from job_hunter.api.jobs import PrivateJobQueries
+from job_hunter.api.jobs import router as jobs_router
 from job_hunter.api.profiles import router as profiles_router
 from job_hunter.api.reauth import FLOW_COOKIE, FLOW_PATH, install_reauthentication
 from job_hunter.api.searches import router as searches_router
@@ -49,6 +51,7 @@ from job_hunter.infrastructure.documents import (
     PostgresExtraction,
     load_storage_settings,
 )
+from job_hunter.infrastructure.job_listing import create_listing
 from job_hunter.infrastructure.oidc import (
     CALLBACK,
     GoogleProvider,
@@ -138,6 +141,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
     app.include_router(searches_router)
+    app.state.job_listing = create_listing(database, ai_config) if database else None
+    app.include_router(jobs_router)
     app.state.sessions = (
         Sessions(
             PostgresSessions(database),
@@ -188,6 +193,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         RequestBoundary, settings=config, upload_max_bytes=storage.max_bytes
     )
+    app.add_middleware(PrivateJobQueries)
 
     @app.middleware("http")
     async def discard_callback_query(
