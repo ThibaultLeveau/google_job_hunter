@@ -45,6 +45,7 @@ from job_hunter.infrastructure.documents import (
     ProposalRecord,
     ProposalSourceRecord,
 )
+from job_hunter.infrastructure.match_events import enqueue_scan
 
 FACT = TypeAdapter(FactData)
 
@@ -167,6 +168,14 @@ def detach_document(session: Session, document: DocumentRecord) -> None:
     ).first()
     if changed is not None:
         profile.revision += 1
+        assert document.deleted_at is not None
+        enqueue_scan(
+            session,
+            document.owner_id,
+            None,
+            f"profile:{profile.revision}",
+            document.deleted_at,
+        )
 
 
 def view(row: ProfileFactRecord, session: Session) -> ProfileFact:
@@ -243,6 +252,15 @@ class PostgresProfiles:
     @contextmanager
     def locked(self, owner: UUID) -> Iterator[tuple[Session, ProfileRecord]]:
         with self.database.transaction() as session:
+            if (
+                session.scalar(
+                    select(UserRecord.id)
+                    .where(UserRecord.id == owner, UserRecord.deleted_at.is_(None))
+                    .with_for_update()
+                )
+                is None
+            ):
+                raise DomainError("not_found")
             yield session, self.lock_profile(session, owner)
 
     def read(self, owner: UUID) -> ProfileSnapshot:
@@ -361,6 +379,9 @@ class PostgresProfiles:
                 session.add(row)
                 outcome = "created"
             profile.revision += 1
+            enqueue_scan(
+                session, owner, None, f"profile:{profile.revision}", self.now()
+            )
             session.flush()
             return FactResult(
                 outcome=outcome, revision=profile.revision, fact=view(row, session)
@@ -373,6 +394,9 @@ class PostgresProfiles:
                 raise DomainError("conflict")
             session.delete(row)
             profile.revision += 1
+            enqueue_scan(
+                session, owner, None, f"profile:{profile.revision}", self.now()
+            )
             session.flush()
             return FactResult(outcome="deleted", revision=profile.revision, fact=None)
 
@@ -513,6 +537,9 @@ class PostgresProfiles:
                 outcomes.append(outcome)
             if changed:
                 profile.revision += 1
+                enqueue_scan(
+                    session, owner, None, f"profile:{profile.revision}", self.now()
+                )
             result = ReviewResult(revision=profile.revision, items=outcomes)
             session.add(
                 ReviewRequestRecord(

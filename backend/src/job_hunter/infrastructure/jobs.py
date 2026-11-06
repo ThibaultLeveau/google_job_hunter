@@ -26,6 +26,7 @@ from job_hunter.domain.jobs import (
 )
 from job_hunter.domain.tasks import require_utc
 from job_hunter.infrastructure.database import Base
+from job_hunter.infrastructure.match_events import enqueue_scan
 from job_hunter.infrastructure.searches import SearchRunRecord
 
 
@@ -189,6 +190,8 @@ class PostgresJobRegistry:
             .on_conflict_do_nothing(index_elements=["run_id", "source_id"])
             .returning(RunJobRecord.source_id)
         )
+        if attached is not None:
+            enqueue_scan(self.session, owner, source_id, f"discovery:{run_id}", now)
         return Registration(source_id, created, attached is not None)
 
     def add_alias(self, source_id: UUID, url: str) -> None:

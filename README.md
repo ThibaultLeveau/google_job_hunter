@@ -1175,8 +1175,25 @@ revalidates result identity, citations and deterministic scores, and shares the 
 with known usage records. Duplicate deliveries reuse one artifact while retaining distinct known calls.
 `run` reuses its default generation, including failures; only an explicit internal generation evaluates
 again. `get` exposes owned history, including stale attempts, while denying removed associations.
-Scheduling, current/stale/pending status selection, task fencing and budgeted user reevaluation remain
-#53; this storage service provides no endpoint or autonomous retry loop. Unified budgets remain #54.
+Issue #53 adds scheduling, status selection, task fencing and budgeted user reevaluation below;
+the storage service itself provides no endpoint or retry loop. Unified budgets remain #54.
+
+### Private match scheduling
+
+Issue #53 wires `MatchSchedule` into the worker. Public requirements plus chunks becoming ready,
+discovery of analyzed jobs, and accepted-profile changes enqueue durable scans in the originating
+transaction. Scans visit at most 25 owners/jobs per task using UUID cursors; unique event and
+evaluation keys reuse committed work. Startup backfill visits 100 owners per page and accounts
+for matching-policy changes. Public analysis stays shared; each evaluation captures owned inputs.
+
+The internal status service distinguishes pending, current, stale history and failed evaluations.
+`request(owner, job, key)` reserves one of three reevaluations per owner per rolling 24 hours and
+enqueues in the same transaction; exhaustion returns `None`. Repeating an owned idempotency key
+returns its original task without another charge, including after a profile change. Provider-wide
+token/cost reservations remain #54. Publication rechecks live ownership, source/profile versions,
+latest requested generation and the worker lease; rejected completions cannot replace current
+results. Failed evaluations require an explicit budgeted request. Fixture matching reports unknown
+fit. Job HTTP endpoints and the explanation interface remain subsequent roadmap issues.
 
 ### Search provider
 

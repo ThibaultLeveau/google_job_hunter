@@ -26,6 +26,7 @@ from job_hunter.infrastructure.documents import (
     load_storage_settings,
 )
 from job_hunter.infrastructure.fetching import HttpFetcher, load_fetch_settings
+from job_hunter.infrastructure.match_scheduling import create_schedule
 from job_hunter.infrastructure.parsing import IsolatedParser
 from job_hunter.infrastructure.pipeline import create_pipeline
 from job_hunter.infrastructure.recovery import PostgresRecovery
@@ -104,7 +105,12 @@ def main() -> None:
         cursor = pipeline.backfill(None, clock.now())
         while cursor is not None and not stop.is_set():
             cursor = pipeline.backfill(cursor, clock.now())
+        matching = create_schedule(pipeline, ai_config, clock.now)
+        cursor = matching.backfill()
+        while cursor is not None and not stop.is_set():
+            cursor = matching.backfill(cursor)
         handlers = {
+            **matching.handlers(),
             **HANDLERS,
             **pipeline.handlers(),
             **PostgresDiscovery(database, search_provider, clock.now).handlers(),
