@@ -12,6 +12,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import RedirectResponse
 
 from job_hunter.api.boundary import RequestBoundary
+from job_hunter.api.documents import router as documents_router
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
 from job_hunter.api.profiles import router as profiles_router
 from job_hunter.api.reauth import FLOW_COOKIE, FLOW_PATH, install_reauthentication
@@ -25,6 +26,7 @@ from job_hunter.api.sessions import (
 from job_hunter.api.sessions import router as sessions_router
 from job_hunter.application.accounts import RegisterAccount, VerifyEmail
 from job_hunter.application.auth_limits import AuthLimits
+from job_hunter.application.documents import DocumentUploads
 from job_hunter.application.oidc import ConsentCancelled, GoogleSignIn, LinkingRequired
 from job_hunter.application.reauth import Reauthentication
 from job_hunter.application.recovery import PasswordRecovery
@@ -37,6 +39,11 @@ from job_hunter.infrastructure.accounts import (
     PostgresSessions,
 )
 from job_hunter.infrastructure.database import Database
+from job_hunter.infrastructure.documents import (
+    LocalStorage,
+    PostgresDocuments,
+    load_storage_settings,
+)
 from job_hunter.infrastructure.oidc import (
     CALLBACK,
     GoogleProvider,
@@ -124,8 +131,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
     app.include_router(profiles_router)
+    storage = load_storage_settings()
+    app.state.documents = (
+        DocumentUploads(
+            PostgresDocuments(database, storage, lambda: datetime.now(UTC)),
+            LocalStorage(storage.root),
+            storage.max_bytes,
+        )
+        if database is not None and storage.root is not None
+        else None
+    )
+    app.include_router(documents_router)
     install_error_handlers(app)
-    app.add_middleware(RequestBoundary, settings=config)
+    app.add_middleware(
+        RequestBoundary, settings=config, upload_max_bytes=storage.max_bytes
+    )
 
     @app.middleware("http")
     async def discard_callback_query(

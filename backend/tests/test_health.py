@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import smtplib
@@ -6,16 +7,19 @@ import ssl
 import subprocess
 import sys
 import traceback
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from threading import Barrier, Event
 from typing import Annotated, cast
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
+from zipfile import ZipFile
 
+import httpx2 as httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -31,14 +35,17 @@ from sqlalchemy.exc import (
     SQLAlchemyError,
 )
 from sqlalchemy.pool import QueuePool
+from test_profiles import owners as profile_owners
 from test_worker import FakeClock, immediate
 
 from job_hunter.api.sessions import COOKIE, authenticated_user
 from job_hunter.app import create_app
 from job_hunter.application.accounts import Mail, RegisterAccount
+from job_hunter.application.documents import DocumentUploads
 from job_hunter.application.sessions import LIFETIME, Sessions, csrf_token, token_hash
 from job_hunter.application.worker import RetryableTaskError, Worker
 from job_hunter.domain.accounts import Registration, SessionUser, Unauthenticated
+from job_hunter.domain.documents import TYPES, InvalidDocument, validate_content
 from job_hunter.domain.errors import DomainError
 from job_hunter.domain.tasks import StaleLease
 from job_hunter.infrastructure.accounts import (
@@ -55,6 +62,13 @@ from job_hunter.infrastructure.accounts import (
     load_mail_settings,
 )
 from job_hunter.infrastructure.database import Database
+from job_hunter.infrastructure.documents import (
+    DocumentRecord,
+    LocalStorage,
+    PostgresDocuments,
+    StorageSettings,
+    load_storage_settings,
+)
 from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord
 from job_hunter.infrastructure.worker import PostgresWorkerStore
 from job_hunter.settings import ConfigurationError, Settings, load_settings
@@ -91,6 +105,9 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
         "/api/v1/profile",
         "/api/v1/profile/facts/{fact_id}",
         "/api/v1/profile/facts",
+        "/api/v1/documents",
+        "/api/v1/documents/{document_id}",
+        "/api/v1/documents/{document_id}/download",
         "/api/health/live",
         "/api/health/ready",
         "/api/auth/providers",
@@ -970,3 +987,333 @@ def test_smtp_uses_tls_canonical_sender_and_safe_transport_failure(
     assert "private-token-canary" not in "".join(
         traceback.format_exception(raised.value)
     )
+
+
+owners = profile_owners
+DOCUMENTS = "/api/v1/documents"
+DOCUMENT_HEADERS = {
+    "Origin": ORIGIN,
+    "X-CSRF-Token": csrf_token("a" * 43),
+    "Content-Type": "text/plain",
+    "X-Document-Name": "../../private%0D%0Aname.txt",
+}
+
+
+def post_document(client: TestClient, body: bytes, **headers: str) -> httpx.Response:
+    return client.post(DOCUMENTS, content=body, headers={**DOCUMENT_HEADERS, **headers})
+
+
+@pytest.fixture
+def document_client(
+    owners: tuple[UUID, UUID],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[TestClient]:
+    monkeypatch.setenv("JOB_HUNTER_DOCUMENT_ROOT", str(tmp_path / "private"))
+    monkeypatch.setenv("JOB_HUNTER_DOCUMENT_MAX_BYTES", "1024")
+    monkeypatch.setenv("JOB_HUNTER_DOCUMENT_QUOTA_COUNT", "2")
+    app = create_app(Settings(allowed_origins=(ORIGIN,)))
+    cast(Sessions, app.state.sessions).now = lambda: NOW
+    with TestClient(app, base_url=ORIGIN) as browser:
+        browser.cookies.set(COOKIE, "a" * 43)
+        yield browser
+
+
+@pytest.mark.parametrize(
+    ("kind", "content", "valid"),
+    [
+        ("text/plain", "Développeur\nPython".encode(), True),
+        ("text/plain", b"\xef\xbb\xbfhello", True),
+        ("text/plain", b"", False),
+        ("text/plain", b"a\x00b", False),
+        ("text/plain", b"\xff", False),
+        ("text/plain", b"\xc3", False),
+        ("text/plain", b"%PDF-1.7", False),
+        ("application/pdf", b"%PDF-1.7\nexample\n%%EOF\n", True),
+        ("application/pdf", b"%PDF-1.7\ntruncated", False),
+        ("application/pdf", b"plain text", False),
+        (list(TYPES)[1], b"PK\x03\x04broken", False),
+        (list(TYPES)[1], b"plain text", False),
+    ],
+)
+def test_document_content_validation(kind: str, content: bytes, valid: bool) -> None:
+    with nullcontext() if valid else pytest.raises(InvalidDocument):
+        validate_content(BytesIO(content), kind, len(content))
+
+
+def test_docx_container_and_entry_bounds() -> None:
+    for names, valid in [
+        (["missing"], False),
+        (["[Content_Types].xml", "_rels/.rels", "word/document.xml"], True),
+        ([str(index) for index in range(1001)], False),
+    ]:
+        file = BytesIO()
+        with ZipFile(file, "w") as archive:
+            for name in names:
+                archive.writestr(name, "<root/>")
+        with nullcontext() if valid else pytest.raises(InvalidDocument):
+            validate_content(file, list(TYPES)[1], file.tell())
+
+
+@pytest.mark.integration
+def test_document_api_ownership_quota_tombstones_and_download(
+    document_client: TestClient,
+    isolated_database: Database,
+    owners: tuple[UUID, UUID],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = document_client
+    assert client.post(DOCUMENTS, content=b"private-canary").status_code == 403
+    created = post_document(client, b"private-canary")
+    assert created.status_code == 201, created.text
+    doc = created.json()
+    assert doc["filename"] == "private__name.txt" and doc["status"] == "queued"
+    assert doc["version"] == 1 and doc["deleted_at"] is None
+    assert "storage" not in created.text and "content_hash" not in created.text
+    path = DOCUMENTS + "/" + doc["id"]
+    assert client.get(path).json() == doc
+    assert client.get(DOCUMENTS).json() == [doc]
+    assert client.get(DOCUMENTS + "?offset=1").json() == []
+    download = client.get(path + "/download")
+    assert download.content == b"private-canary"
+    assert download.headers["content-disposition"].startswith("attachment;")
+    assert download.headers["x-content-type-options"] == "nosniff"
+    assert download.headers["cache-control"] == "no-store"
+    assert post_document(client, b"private-canary").status_code == 200
+    assert post_document(client, b"second").status_code == 201
+    assert post_document(client, b"third").status_code == 409
+    client.cookies.set(COOKIE, "b" * 43)
+    assert client.get(DOCUMENTS).json() == []
+    assert client.get(path).status_code == 404
+    assert client.get(path + "/download").status_code == 404
+    foreign = {"X-CSRF-Token": csrf_token("b" * 43)}
+    other = post_document(client, b"private-canary", **foreign)
+    assert other.status_code == 201 and other.json()["id"] != doc["id"]
+    with pytest.raises(IntegrityError), isolated_database.transaction() as session:
+        session.execute(
+            update(DocumentRecord)
+            .where(DocumentRecord.owner_id == owners[1])
+            .values(owner_id=owners[0])
+        )
+    with isolated_database.transaction() as session:
+        session.execute(
+            update(UserRecord)
+            .where(UserRecord.id == owners[1])
+            .values(email_verified_at=None)
+        )
+        session.execute(
+            update(DocumentRecord)
+            .where(DocumentRecord.id == UUID(doc["id"]))
+            .values(deleted_at=NOW)
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(TaskRecord)
+                .where(TaskRecord.kind == "document_parse")
+            )
+            == 3
+        )
+    assert post_document(client, b"other", **foreign).status_code == 403
+    client.cookies.set(COOKIE, "a" * 43)
+    assert client.get(path).status_code == 404
+    assert client.get(path + "/download").status_code == 404
+    assert post_document(client, b"private-canary").status_code == 409
+    client.cookies.clear()
+    assert client.get(DOCUMENTS).status_code == 401
+    assert len(list((tmp_path / "private").iterdir())) == 3
+    assert "private-canary" not in caplog.text
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("failure", ["stage", "write", "publish", "enqueue"])
+def test_document_failures_leave_no_records_tasks_or_files(
+    document_client: TestClient,
+    isolated_database: Database,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    from job_hunter.application.documents import PendingUpload
+
+    target = {"enqueue": PostgresTaskQueue, "write": PendingUpload}.get(
+        failure, LocalStorage
+    )
+    monkeypatch.setattr(
+        target, failure, MagicMock(side_effect=OSError("private-failure-canary"))
+    )
+    response = post_document(document_client, b"private")
+    assert response.status_code == 503 and "canary" not in response.text
+    records = PostgresDocuments(isolated_database, StorageSettings(), lambda: NOW)
+    LocalStorage(tmp_path / "private").reap(
+        records, datetime.now(UTC) + timedelta(hours=2)
+    )
+    assert list((tmp_path / "private").iterdir()) == []
+    with isolated_database.transaction() as session:
+        assert session.scalar(select(func.count()).select_from(DocumentRecord)) == 0
+        assert session.scalar(select(func.count()).select_from(TaskRecord)) == 0
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("case", ["oversized", "timeout", "valid"])
+def test_document_body_streams_without_buffering_and_cleans_partial_files(
+    document_client: TestClient,
+    tmp_path: Path,
+    case: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeout = asyncio.timeout
+    if case == "timeout":
+        monkeypatch.setattr(asyncio, "timeout", lambda seconds: timeout(0))
+
+    async def exercise() -> httpx.Response:
+        async def body() -> AsyncIterator[bytes]:
+            yield b"first"
+            assert list((tmp_path / "private").glob("*.part"))
+            yield b"x" * (1024 if case == "oversized" else 8)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=document_client.app), base_url=ORIGIN
+        ) as client:
+            return await client.post(
+                DOCUMENTS,
+                content=body(),
+                headers={**DOCUMENT_HEADERS, "Cookie": COOKIE + "=" + "a" * 43},
+            )
+
+    response = asyncio.run(exercise())
+    monkeypatch.setattr(asyncio, "timeout", timeout)
+    assert (
+        response.status_code == {"oversized": 413, "timeout": 408, "valid": 201}[case]
+    )
+    assert not list((tmp_path / "private").glob("*.part"))
+    if case != "valid":
+        assert not list((tmp_path / "private").iterdir())
+    assert post_document(document_client, b"a" * 1025).status_code == 413
+    for extra in [
+        {"Content-Type": "image/png"},
+        {"Content-Type": "application/pdf"},
+        {"X-Document-Name": "%ff"},
+    ]:
+        assert post_document(document_client, b"text", **extra).status_code == 415
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("same", [True, False])
+def test_concurrent_uploads_deduplicate_and_enforce_quota(
+    isolated_database: Database,
+    owners: tuple[UUID, UUID],
+    tmp_path: Path,
+    same: bool,
+) -> None:
+    database = Database(Settings(database_pool_size=2))
+    settings = StorageSettings(quota_bytes=4)
+    records = PostgresDocuments(database, settings, lambda: NOW)
+    storage = LocalStorage(tmp_path / "private")
+    service = DocumentUploads(records, storage, 1024)
+    barrier = Barrier(2)
+
+    def upload(index: int) -> tuple[str, bool]:
+        with service.receive("resume", "text/plain") as pending:
+            pending.write(b"same" if same else str(index).encode() * 4)
+            barrier.wait(timeout=5)
+            try:
+                document, created = service.finish(owners[0], pending)
+                return str(document.id), created
+            except DomainError:
+                return "conflict", False
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(upload, [0, 1]))
+        assert sum(created for _, created in results) == 1
+        assert (results[0][0] == results[1][0]) is same
+        if not same:
+            assert any(key == "conflict" for key, _ in results)
+        with database.transaction() as session:
+            assert session.scalar(select(func.count()).select_from(DocumentRecord)) == 1
+            task = session.scalars(select(TaskRecord)).one()
+            assert task.kind == "document_parse" and task.status == "pending"
+            assert task.payload_ref == task.subject_id
+            assert (
+                PostgresTaskQueue(session).claim(
+                    ("verification_mail",), NOW, timedelta(seconds=30)
+                )
+                is None
+            )
+        assert len(list(storage.root.iterdir())) == 1
+    finally:
+        database.close()
+
+
+@pytest.mark.integration
+def test_orphan_sweep_preserves_active_committed_and_uncertain_writes(
+    isolated_database: Database,
+    owners: tuple[UUID, UUID],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = LocalStorage(tmp_path / "private")
+    records = PostgresDocuments(isolated_database, StorageSettings(), lambda: NOW)
+    service = DocumentUploads(records, storage, 1024)
+    with service.receive("resume", "text/plain") as pending:
+        pending.write(b"resume")
+        doc, _ = service.finish(owners[0], pending)
+    with service.receive("active", "text/plain") as pending:
+        storage.publish(pending.key, pending.file)
+        os.utime(storage.path(pending.key), (0, 0))
+        key, file = storage.stage()
+        file.close()  # Simulate process death before publishing a reference.
+        os.utime(storage.path(key, ".part"), (0, 0))
+        (storage.root / "unrelated").touch()
+        storage.reap(records, datetime.now(UTC) + timedelta(hours=2))
+        assert storage.path(pending.key).exists()
+        assert not storage.path(key, ".part").exists()
+        assert records.get(owners[0], doc.id)[0] == doc
+    with monkeypatch.context() as patcher:
+        add = records.add
+
+        def uncertain(*args: object) -> None:
+            add(*args)  # type: ignore[arg-type]
+            raise OSError("Lost commit acknowledgement")
+
+        patcher.setattr(records, "add", uncertain)
+        with (
+            pytest.raises(OSError),
+            service.receive("uncertain", "text/plain") as pending,
+        ):
+            pending.write(b"uncertain")
+            service.finish(owners[0], pending)
+    storage.reap(records, datetime.now(UTC) + timedelta(hours=2))
+    assert len(list(storage.root.glob("*.blob"))) == 2
+    assert (storage.root / "unrelated").exists()
+    with pytest.raises(ValueError):
+        storage.open("../escape")
+    with monkeypatch.context() as patcher:
+        patcher.setenv("JOB_HUNTER_DOCUMENT_ROOT", str(storage.root))
+        subprocess.run(
+            [sys.executable, "-m", "job_hunter.infrastructure.documents"],
+            check=True,
+            capture_output=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("ROOT", "relative-private-canary"),
+        ("MAX_BYTES", "0"),
+        ("QUOTA_COUNT", "1001"),
+        ("QUOTA_BYTES", "bad"),
+    ],
+)
+def test_storage_configuration_rejects_invalid_limits_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+) -> None:
+    monkeypatch.setenv("JOB_HUNTER_DOCUMENT_" + name, value)
+    with pytest.raises(ConfigurationError) as error:
+        load_storage_settings()
+    assert "canary" not in str(error.value)

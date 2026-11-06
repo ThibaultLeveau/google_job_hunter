@@ -427,6 +427,26 @@ language, locator and exact quote). Manual facts return an empty list; clients c
 through fact writes. Document foreign keys, source validation and persistent joins arrive in #28;
 upload, extraction, fuzzy matching and profile screens remain their owning issues.
 
+### Private document uploads
+
+Verified sessions POST raw PDF, DOCX or UTF-8 TXT bytes to `/api/v1/documents` with the matching
+`Content-Type`, percent-encoded UTF-8 `X-Document-Name`, Origin and CSRF headers. The binary body streams;
+signature/container/encoding checks precede persistence. Parsing is #26; no deletion endpoint exists (#30).
+201 returns the queued document; exact same-owner bytes return the existing document with 200.
+GET the collection (100 items/page, `offset`), `/{id}` for status, or `/{id}/download` for an attachment.
+Foreign/missing/tombstoned IDs return 404. Filenames are sanitized metadata; keys, hashes and paths stay private.
+Set `JOB_HUNTER_DOCUMENT_ROOT` to an absolute local-volume directory outside the web root, mode 0700,
+API/worker service account only; files use 0600. Unconfigured document storage returns 503 after authentication.
+`JOB_HUNTER_DOCUMENT_MAX_BYTES` defaults to 10485760 (range 1–52428800), `QUOTA_BYTES` to 104857600
+(range 1–1073741824), and `QUOTA_COUNT` to 100 (range 1–1000), all with the same document prefix.
+Errors: 60-second timeout 408, oversize 413, invalid content 415, quota/tombstone 409, storage failure 503.
+Quotas count committed documents and tombstones; checks serialize per owner. Temporary use is bounded per request.
+Document creation and `document_parse` enqueue commit together; tasks wait for the parser handler.
+Schedule `uv run --directory backend --locked python -m job_hunter.infrastructure.documents` hourly
+with the same database/storage settings on the same filesystem with working POSIX locks. It scans without
+loading all files. It removes unreferenced blobs older than one hour, preserving active uploads and committed
+references (including tombstones). Uncertain commits retain blobs until references can be checked; retry failed sweeps.
+
 ### Local PostgreSQL and migrations
 
 From the root, start the development-only database (Docker Compose required):
