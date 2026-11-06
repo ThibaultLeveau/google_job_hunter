@@ -71,6 +71,9 @@ class SearchRunRecord(Base):
             "jsonb_typeof(snapshot) = 'object'", name="ck_search_run_snapshot"
         ),
         CheckConstraint(
+            "jsonb_typeof(discovery) = 'object'", name="ck_search_run_discovery"
+        ),
+        CheckConstraint(
             "status IN ('pending','running','completed','partial',"
             "'failed','cancelled')",
             name="ck_search_run_status",
@@ -80,7 +83,8 @@ class SearchRunRecord(Base):
             "AND skipped_results >= 0 "
             "AND new_urls + known_urls + skipped_results <= found_results "
             "AND processing_total >= 0 "
-            "AND processing_ready BETWEEN 0 AND processing_total",
+            "AND processing_ready >= 0 AND processing_failed >= 0 "
+            "AND processing_ready + processing_failed <= processing_total",
             name="ck_search_run_counters",
         ),
         Index("ix_search_run_owner", "owner_id", "created_at", "id"),
@@ -98,6 +102,8 @@ class SearchRunRecord(Base):
     skipped_results: Mapped[int] = mapped_column(default=0)
     processing_total: Mapped[int] = mapped_column(default=0)
     processing_ready: Mapped[int] = mapped_column(default=0)
+    processing_failed: Mapped[int] = mapped_column(default=0)
+    discovery: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -230,7 +236,7 @@ class PostgresSearches:
                     or prior.search_revision != expected_revision
                 ):
                     raise DomainError("conflict")
-                return run_view(prior)
+                return self.view(session, prior)
             saved = self.owned(session, owner, search_id)
             if saved.revision != expected_revision:
                 raise DomainError("conflict")
@@ -274,7 +280,7 @@ class PostgresSearches:
                 .offset(offset)
             ).all()
             return RunPage(
-                items=tuple(run_view(row) for row in rows[:limit]),
+                items=tuple(self.view(session, row) for row in rows[:limit]),
                 next_offset=offset + limit if len(rows) > limit else None,
             )
 
@@ -291,21 +297,53 @@ class PostgresSearches:
 
     def run(self, owner: UUID, run_id: UUID) -> SearchRun:
         with self.database.transaction() as session:
-            return run_view(self.owned_run(session, owner, run_id))
+            return self.view(session, self.owned_run(session, owner, run_id))
+
+    @staticmethod
+    def view(session: Session, row: SearchRunRecord) -> SearchRun:
+        view = run_view(row)
+        if (
+            row.status in {"pending", "running"}
+            and session.scalar(
+                select(TaskRecord.id).where(
+                    TaskRecord.kind == DISCOVERY,
+                    TaskRecord.subject_id == row.id,
+                    TaskRecord.subject_version == view.discovery.pages_completed + 1,
+                    TaskRecord.status == "failed",
+                )
+            )
+            is not None
+        ):
+            return view.model_copy(
+                update={
+                    "status": "partial" if view.discovery.pages_completed else "failed",
+                    "discovery": view.discovery.model_copy(
+                        update={"error_code": "worker_failure"}
+                    ),
+                }
+            )
+        return view
 
     def cancel(self, owner: UUID, run_id: UUID) -> SearchRun:
-        with self.locked(owner) as session:
+        with self.database.transaction() as session:
             self.owned_run(session, owner, run_id)
             # Worker publication locks its task before the run; use the same order.
-            task = session.scalars(
-                select(TaskRecord)
-                .where(
-                    TaskRecord.kind == DISCOVERY,
-                    TaskRecord.subject_id == run_id,
-                    TaskRecord.subject_version == 1,
+            tasks: list[TaskRecord] = []
+            while batch := list(
+                session.scalars(
+                    select(TaskRecord)
+                    .where(
+                        TaskRecord.kind == DISCOVERY,
+                        TaskRecord.subject_id == run_id,
+                        TaskRecord.subject_version
+                        > (tasks[-1].subject_version if tasks else 0),
+                    )
+                    .order_by(TaskRecord.subject_version)
+                    .with_for_update()
                 )
-                .with_for_update()
-            ).one()
+            ):
+                # A page may commit its successor while this query waits for its lock.
+                tasks.extend(batch)
             row = session.scalars(
                 select(SearchRunRecord)
                 .where(SearchRunRecord.id == run_id, SearchRunRecord.owner_id == owner)
@@ -314,8 +352,10 @@ class PostgresSearches:
             ).one()
             if row.status in ("pending", "running"):
                 row.status, row.updated_at = "cancelled", self.now()
-                task.status, task.updated_at = "cancelled", row.updated_at
-                task.lease_token, task.lease_expires_at = uuid4(), None
-                task.generation += 1
-                task.error_code = None
+                for task in tasks:
+                    if task.status != "succeeded":
+                        task.status, task.updated_at = "cancelled", row.updated_at
+                        task.lease_token, task.lease_expires_at = uuid4(), None
+                        task.generation += 1
+                        task.error_code = None
             return run_view(row)

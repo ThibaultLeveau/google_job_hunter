@@ -731,7 +731,8 @@ acknowledges the stage in that same transaction; any publication failure rolls a
 Committed stages are not rerun, so the next task resumes from their preserved artifacts.
 Delivery is at least once: a crash after a provider response but before commit can repeat the call.
 Handlers must reserve/reconcile user and global budgets before paid calls and use provider
-idempotency where available, including any SDK retries. SMTP is the only external adapter; no paid calls exist yet.
+idempotency where available, including any SDK retries. Search uses bounded per-run attempts;
+atomic user/global search budgets arrive in #54. External adapters require explicit configuration.
 Tests inject clock/sleep and jitter, plus deterministic handlers, against real PostgreSQL.
 
 ### Search preview
@@ -809,8 +810,8 @@ Repeated cancellation preserves the result; completed/partial/failed runs remain
 Cancellation fences only that personal task, preserving shared processing. Worker publication must
 lock the task before the run and recheck its active state before creating personal associations.
 
-Run states are pending/running/completed/partial/failed/cancelled; current tasks stay pending until
-#39 registers discovery. Counters distinguish provider results found, newly registered URLs,
+Run states are pending/running/completed/partial/failed/cancelled; #39 registers the discovery worker.
+Counters distinguish provider results found, newly registered URLs,
 previously known URLs and skipped results. `processing_total` counts associated jobs to analyze;
 `processing_ready` counts those ready for inspection. Discovery completion does not imply analysis
 completion. Tests in `tests/test_saved_searches.py` cover real-PostgreSQL ownership, revisions,
@@ -873,6 +874,34 @@ Deleting an owner cascades private associations while preserving public sources 
 concurrent inserts, namespace constraints, rollback and migration downgrade/upgrade with PostgreSQL.
 Discovery execution/enqueue (#39), SSRF-safe fetching (#43), fuzzy deduplication and jobs APIs are
 outside this issue; there is no new HTTP endpoint or external call.
+
+### Discovery execution
+
+Issue #39 registers `search_discovery` with the existing worker command. Each task handles one
+provider page from the immutable run snapshot. The run's `discovery` object exposes committed
+`pages_completed`, frozen `max_pages`/`max_results`, conservative `provider_requests`, sanitized
+`last_request_id`, `error_code` and `limited`. Requests are reserved before external I/O, so the
+count includes uncertain outcomes after crashes; fixtures reserve zero external requests.
+No database lock is held during provider I/O. Publication fences the lease, locks/rechecks the
+active run and account tombstone, and commits sources, private associations, counters, new-source
+`job_crawl` tasks and the next page task together. Cancellation fences pending/running page tasks
+and blocks late publication; already committed public sources and completed pages remain reusable.
+
+Page checkpoints survive restarts. A crash before commit can repeat that provider page, while
+unique source/association/task keys prevent duplicate stored work. At most three automatic attempts
+per page and ten pages are allowed; ordinary provider errors terminate the run without hidden retries.
+Missing/disabled configuration reports `unconfigured`/`disabled`; other safe provider codes remain
+distinct. Failure after a committed page reports `partial`; an exhausted worker task is projected as
+`worker_failure` through run APIs. Starting a new run requires a new idempotency key.
+
+Counters count returned slots, new/known URLs and skipped entries; repeated known URLs do not add
+duplicate associations. `processing_failed` counts already-failed crawl tasks encountered when new
+associations are made. Existing pending/completed/failed source work is preserved without automatic
+retry. Discovery completion does not mean job analysis is complete; crawl execution arrives in #43.
+Run `uv run --locked pytest --require-database tests/test_discovery.py tests/test_saved_searches.py`
+from `backend/` for real-PostgreSQL API/worker checks, overlap/reuse, caps, crash/rollback recovery,
+partial failures, cancellation and account deletion during a blocked fixture request. Tests also
+exercise registered worker shutdown/draining; no live paid call or new interface is part of this issue.
 
 | Available since | Working directory | Command contract |
 | --- | --- | --- |

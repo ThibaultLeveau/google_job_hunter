@@ -16,6 +16,7 @@ from job_hunter.infrastructure.accounts import (
 )
 from job_hunter.infrastructure.ai import create_ai, load_ai_settings
 from job_hunter.infrastructure.database import Database
+from job_hunter.infrastructure.discovery import PostgresDiscovery
 from job_hunter.infrastructure.documents import (
     DocumentParsing,
     LocalStorage,
@@ -24,6 +25,10 @@ from job_hunter.infrastructure.documents import (
 )
 from job_hunter.infrastructure.parsing import IsolatedParser
 from job_hunter.infrastructure.recovery import PostgresRecovery
+from job_hunter.infrastructure.search_provider import (
+    create_search_provider,
+    load_search_settings,
+)
 from job_hunter.infrastructure.worker import Handler, PostgresWorkerStore
 from job_hunter.settings import load_settings
 
@@ -48,6 +53,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     ai_config = load_ai_settings()
+    search_provider = create_search_provider(load_search_settings())
     if ai_config.provider == "fixture" and args.profile_fixture is None:
         parser.error("Fixture AI requires --profile-fixture.")
     stop = Event()
@@ -80,6 +86,7 @@ def main() -> None:
             pass
         handlers = {
             **HANDLERS,
+            **PostgresDiscovery(database, search_provider, clock.now).handlers(),
             **extraction.handlers(),
             **verification.handlers(SmtpMail(mail_settings), clock.now),
             **recovery.handlers(
