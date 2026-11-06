@@ -70,6 +70,7 @@ class TaskRecord(Base):
     lease_token: Mapped[UUID]
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(32))
+    capacity_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -161,6 +162,7 @@ class PostgresTaskQueue(TaskQueue):
         *,
         run_at: datetime | None = None,
         lease: timedelta | None = None,
+        refund: bool = False,
     ) -> Task:
         require_utc(now)
         row = self.session.scalar(
@@ -179,6 +181,7 @@ class PostgresTaskQueue(TaskQueue):
                 run_at=run_at if run_at is not None else TaskRecord.run_at,
                 error_code=error.value if error is not None else None,
                 updated_at=now,
+                attempts=TaskRecord.attempts - int(refund),
             )
             .returning(TaskRecord)
             .execution_options(populate_existing=True)
@@ -223,6 +226,29 @@ class PostgresTaskQueue(TaskQueue):
             row.run_at = row.updated_at = now
         self.session.flush()
 
+    def postpone(self, task: Task, retry_at: datetime, now: datetime) -> Task:
+        require_utc(retry_at)
+        if retry_at <= now:
+            raise ValueError("Capacity waits must be in the future.")
+        row = self.session.scalar(
+            select(TaskRecord).where(TaskRecord.id == task.id).with_for_update()
+        )
+        if row is None:
+            raise StaleLease()
+        if row.capacity_deadline is not None and now >= row.capacity_deadline:
+            return self.fail(task, TaskError.EXHAUSTED, now)
+        result = self._transition(
+            task,
+            now,
+            "pending",
+            None,
+            run_at=min(retry_at, now + timedelta(hours=1)),
+            refund=True,
+        )
+        if row.capacity_deadline is None:
+            row.capacity_deadline = now + timedelta(days=1)
+        return result
+
     def complete(self, task: Task, now: datetime) -> Task:
         return self._transition(task, now, "succeeded", None)
 
@@ -251,6 +277,7 @@ class PostgresTaskQueue(TaskQueue):
                 status="pending",
                 generation=TaskRecord.generation + 1,
                 attempts=0,
+                capacity_deadline=None,
                 lease_token=uuid4(),
                 lease_expires_at=None,
                 error_code=None,

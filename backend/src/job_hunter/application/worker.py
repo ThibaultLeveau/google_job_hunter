@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from threading import Event
 from typing import Protocol
 
-from job_hunter.domain.tasks import StaleLease, Task, TaskError
+from job_hunter.domain.tasks import StaleLease, Task, TaskError, require_utc
 
 logger = logging.getLogger(__name__)
 type Execute = Callable[[Task], object]
@@ -15,6 +15,21 @@ type Submit = Callable[[Execute, Task], Future[object]]
 
 class RetryableTaskError(Exception):
     """A bounded adapter call failed transiently; its message is never persisted."""
+
+    def __init__(self, *args: object, retry_at: datetime | None = None) -> None:
+        if retry_at is not None:
+            require_utc(retry_at)
+        self.retry_at = retry_at
+        super().__init__(*args)
+
+
+class DeferredTaskError(Exception):
+    """Capacity is unavailable; return the claim without spending a failure attempt."""
+
+    def __init__(self, retry_at: datetime) -> None:
+        require_utc(retry_at)
+        self.retry_at = retry_at
+        super().__init__("capacity_wait")
 
 
 class PermanentTaskError(Exception):
@@ -33,6 +48,7 @@ class WorkerStore(Protocol):
     def recover(self, kinds: tuple[str, ...], now: datetime) -> None: ...
     def renew(self, task: Task, now: datetime, lease: timedelta) -> None: ...
     def publish(self, task: Task, result: object, now: datetime) -> None: ...
+    def postpone(self, task: Task, retry_at: datetime, now: datetime) -> None: ...
     def reject(
         self, task: Task, error: TaskError, retry_at: datetime | None, now: datetime
     ) -> None: ...
@@ -86,8 +102,17 @@ class Worker:
                     code = TaskError.TRANSIENT
                     delay = min(60, 2 ** min(job.task.attempts - 1, 6)) * self.jitter()
                     retry_at = now + timedelta(seconds=delay)
+                    if error.retry_at is not None:
+                        retry_at = max(
+                            retry_at, min(error.retry_at, now + timedelta(hours=1))
+                        )
             try:
-                self.store.reject(job.task, code, retry_at, now)
+                if isinstance(error, DeferredTaskError):
+                    self.store.postpone(
+                        job.task, max(now + timedelta(seconds=1), error.retry_at), now
+                    )
+                else:
+                    self.store.reject(job.task, code, retry_at, now)
             except StaleLease:
                 pass
             except Exception:
