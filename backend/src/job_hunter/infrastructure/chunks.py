@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from uuid import UUID
 
 from sqlalchemy import (
@@ -101,8 +102,12 @@ class PostgresChunks:
         with self.database.transaction() as session:
             return read(session, content_id, policy_version)
 
-    def publish(self, result: ChunkSet) -> ChunkSet:
-        with self.database.transaction() as session:
+    def publish(self, result: ChunkSet, transaction: Session | None = None) -> ChunkSet:
+        with (
+            self.database.transaction()
+            if transaction is None
+            else nullcontext(transaction)
+        ) as session:
             if result != chunk_text(
                 result.content_id, source(session, result.content_id), result.policy
             ):
