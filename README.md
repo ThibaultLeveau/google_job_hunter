@@ -1298,7 +1298,7 @@ Deep links require an authenticated, verified session and an owned discovery. In
 or inaccessible IDs show a safe unavailable state; loading, failed refresh and retry
 states retain a useful route back. Queries are cancelled and private caches cleared
 on account changes. The profile-match section separates evaluated evidence from public
-job facts; processing retry controls remain a separate interface issue.
+job facts; processing status keeps available content usable while other stages finish.
 
 Match explanations show server-calculated scores, weighted evidence coverage and
 matched/partial/missing/unknown assessments, with each score contribution when
@@ -1314,6 +1314,29 @@ Reevaluation uses the existing owner-scoped allowance and provider budgets, bloc
 duplicate submission and reuses the request key after uncertain delivery. Accepted
 requests mark the prior result outdated immediately; refresh checks completion and
 remaining allowance. Account changes abort requests and discard private match caches.
+
+The processing timeline shows posting download, readable/prepared text, evidence
+sections/search, job facts and application requirements with independent readiness.
+Safe messages distinguish unsupported or denied sources, quota, temporary failures
+and partly ready evidence. Search and document pages reuse the processing state and
+failure language. Provider payloads, task IDs, revisions and other owners' activity
+are never displayed.
+
+Only active attempts or pending eligible evaluations poll the compact status endpoint
+every five seconds while visible. Terminal states, failed reads, unmount and account
+changes stop polling; manual refresh recovers a failed read. Status changes refresh
+the owned detail/list/run views. Retry controls require the API's retryable flag and
+remaining allowance, send its stage/version/generation fence, block duplicate clicks
+and reuse a request key after uncertain delivery. Shared retries read the current
+attempt after admission, including when an earlier receipt is already complete.
+
+Issue #61 browser validation used the real API, worker and isolated PostgreSQL with
+deterministic providers. Active/hidden/terminal polling, partial and degraded content,
+denied sources, retry recovery and two-owner isolation passed. Tab reached the retry
+control and repeated Enter submitted one request. At 320/768/1440 px and 100%/200% text,
+there was no horizontal overflow or axe violation. Captures:
+[desktop](docs/validation/issue-61-desktop.jpg) and
+[mobile](docs/validation/issue-61-mobile.jpg).
 
 Issue #60 browser validation used the real API, worker and isolated PostgreSQL with
 deterministic providers. Current/unknown scores, profile-change staleness, historical

@@ -559,3 +559,10 @@ section {
 .job-source-paragraph { border-top: 1px solid var(--color-border); }
 @media (max-width: 60rem) { .job-detail-columns { grid-template-columns: 1fr; gap: 0; } }
 @media (max-width: 40rem) { .job-detail-panel { padding: var(--space-4); } }
+
+.job-processing-stages { list-style: none; padding: 0; margin-block: var(--space-4); }
+.job-processing-stages > li { padding-block: var(--space-3); border-top: 1px solid var(--color-border); }
+.job-processing-stages > li > div { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); align-items: baseline; }
+.job-processing-stages h4, .job-processing-stages .job-note { margin: 0; }
+.job-processing-stages h4 { flex: 1 1 13rem; }
+.job-processing-stages > li > p { margin-block: var(--space-2); }
