@@ -443,10 +443,10 @@ Revision advances once per batch that creates facts or adds evidence; rejection/
 
 Verified sessions POST raw PDF, DOCX or UTF-8 TXT bytes to `/api/v1/documents` with the matching
 `Content-Type`, percent-encoded UTF-8 `X-Document-Name`, Origin and CSRF headers. The binary body streams;
-signature/container/encoding checks precede persistence. No deletion endpoint exists yet (#30).
+signature/container/encoding checks precede persistence.
 201 returns the queued document; exact same-owner bytes return the existing document with 200.
 GET the collection (100 items/page, `offset`), `/{id}` for status, or `/{id}/download` for an attachment.
-Foreign/missing/tombstoned IDs return 404. Filenames are sanitized metadata; keys, hashes and paths stay private.
+Foreign/missing IDs return 404. Filenames are sanitized metadata; keys, hashes and paths stay private.
 Set `JOB_HUNTER_DOCUMENT_ROOT` to an absolute local-volume directory outside the web root, mode 0700,
 API/worker service account only; files use 0600. Unconfigured document storage returns 503 after authentication.
 `JOB_HUNTER_DOCUMENT_MAX_BYTES` defaults to 10485760 (range 1–52428800), `QUOTA_BYTES` to 104857600
@@ -458,6 +458,23 @@ Schedule `uv run --directory backend --locked python -m job_hunter.infrastructur
 with the same database/storage settings on the same filesystem with working POSIX locks. It scans without
 loading all files. It removes unreferenced blobs older than one hour, preserving active uploads and committed
 references (including tombstones). Uncertain commits retain blobs until references can be checked; retry failed sweeps.
+
+Verified owners DELETE `/{id}` with Origin/CSRF headers. The transaction tombstones the document,
+cancels and fences unfinished parsing/extraction, marks accepted evidence unavailable and enqueues cleanup.
+DELETE returns 202 while `status` is `deleting`, then 200 when `deleted`; GET `/{id}` returns the same
+state containing only `id`, `status` and nullable `error`. Repeated deletion is idempotent. Tombstoned
+documents disappear from the collection; downloads and proposals immediately return 404.
+Accepted facts remain, with removed document IDs in `unavailable_sources` and no old source quotes.
+Affected profile revisions advance once; manual content and evidence from other documents remain intact.
+
+The configured worker also consumes `document_cleanup`. It removes the blob outside database locks,
+then commits at most 100 proposals and 10 parsed versions per step, including their private dependent data.
+Completed steps and the next task commit together. Missing files succeed; directory changes are fsynced.
+Storage/database failures retry safely, including restart after unlink but before database commit.
+After five failed attempts, `error` is `cleanup_failed`; repeating DELETE resumes the failed step.
+The owner-scoped `PostgresDocuments.delete` operation is reusable by later account deletion.
+Minimal tombstone/task metadata and text-free evidence markers remain. Existing tombstones still count
+toward quotas and prevent identical reuploads; account deletion and quota reclamation are outside #30.
 
 ### Bounded document parsing
 

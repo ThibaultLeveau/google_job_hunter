@@ -127,6 +127,48 @@ class FactSourceRecord(Base):
     end: Mapped[int] = mapped_column(primary_key=True)
 
 
+class UnavailableSourceRecord(Base):
+    __tablename__ = "unavailable_profile_sources"
+    fact_id: Mapped[UUID] = mapped_column(
+        ForeignKey("profile_facts.id", ondelete="CASCADE"), primary_key=True
+    )
+    document_id: Mapped[UUID] = mapped_column(
+        ForeignKey("documents.id"), primary_key=True
+    )
+
+
+def detach_document(session: Session, document: DocumentRecord) -> None:
+    profile = session.scalar(
+        select(ProfileRecord)
+        .where(ProfileRecord.owner_id == document.owner_id)
+        .with_for_update()
+    )
+    if profile is None:
+        return
+    facts = (
+        select(FactSourceRecord.fact_id, ParsedDocumentRecord.document_id)
+        .select_from(FactSourceRecord)
+        .join(ProfileFactRecord)
+        .join(ProposalSourceRecord)
+        .join(ProposalRecord)
+        .join(ExtractionRecord)
+        .join(ParsedDocumentRecord)
+        .where(
+            ParsedDocumentRecord.document_id == document.id,
+            ProfileFactRecord.owner_id == document.owner_id,
+        )
+        .distinct()
+    )
+    changed = session.scalars(
+        insert(UnavailableSourceRecord)
+        .from_select(["fact_id", "document_id"], facts)
+        .on_conflict_do_nothing()
+        .returning(UnavailableSourceRecord.fact_id)
+    ).first()
+    if changed is not None:
+        profile.revision += 1
+
+
 def view(row: ProfileFactRecord, session: Session) -> ProfileFact:
     evidence = session.execute(
         select(
@@ -156,6 +198,13 @@ def view(row: ProfileFactRecord, session: Session) -> ProfileFact:
         created_at=row.created_at,
         updated_at=row.updated_at,
         user_fields=tuple(row.user_fields),
+        unavailable_sources=tuple(
+            session.scalars(
+                select(UnavailableSourceRecord.document_id)
+                .where(UnavailableSourceRecord.fact_id == row.id)
+                .order_by(UnavailableSourceRecord.document_id)
+            )
+        ),
         source_associations=tuple(
             SourceEvidence(
                 document_id=document,
@@ -229,6 +278,11 @@ class PostgresProfiles:
 
     def get(self, owner: UUID, fact_id: UUID) -> ProfileFact:
         with self.database.transaction() as session:
+            session.scalar(
+                select(ProfileRecord)
+                .where(ProfileRecord.owner_id == owner)
+                .with_for_update(read=True)
+            )
             return view(self.owned(session, owner, fact_id), session)
 
     def put(

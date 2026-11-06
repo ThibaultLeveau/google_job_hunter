@@ -134,5 +134,6 @@ class ProfileFact(ProfileValue):
     data: FactData
     created_at: datetime
     updated_at: datetime
+    unavailable_sources: tuple[UUID, ...] = ()
     user_fields: tuple[str, ...] = ()
     source_associations: tuple[SourceEvidence, ...] = ()
