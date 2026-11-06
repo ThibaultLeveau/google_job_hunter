@@ -332,9 +332,13 @@ def test_late_worker_result_is_fenced_and_source_retained_until_terminal(
     with pytest.raises(PermanentTaskError):
         store.publish(task, result, task.lease_expires_at - timedelta(seconds=1))
     with db.transaction() as session:
-        row = session.get(TaskRecord, task.id)
-        assert row is not None
-        row.status, row.lease_expires_at, row.updated_at = "cancelled", None, NOW
+        for row in session.scalars(
+            select(TaskRecord).where(
+                TaskRecord.payload_ref == task.payload_ref,
+                TaskRecord.status != "succeeded",
+            )
+        ):
+            row.status, row.lease_expires_at, row.updated_at = "cancelled", None, NOW
     applied = cleanup.batch(ArtifactPolicy(), dry_run=False)
     assert applied.counts["job_preparations"] == 1
     assert totals(db)["job_cleanings"] == 0

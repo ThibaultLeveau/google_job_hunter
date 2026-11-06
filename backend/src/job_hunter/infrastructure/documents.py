@@ -3,6 +3,7 @@ import os
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
+from heapq import nsmallest
 from pathlib import Path
 from typing import BinaryIO, cast
 from uuid import UUID, uuid4
@@ -881,24 +882,59 @@ class LocalStorage(PrivateStorage):
             os.fdopen(os.open(self.path(key), os.O_RDONLY | os.O_NOFOLLOW), "rb"),
         )
 
-    def reap(self, records: Documents, now: datetime) -> None:
+    def reap(
+        self,
+        records: Documents,
+        now: datetime,
+        *,
+        limit: int = 100,
+        after: str | None = None,
+        dry_run: bool = False,
+        hours: int = 1,
+    ) -> tuple[int, int, str | None]:
+        if (
+            not 1 <= limit <= 100
+            or not 1 <= hours <= 87600
+            or (
+                after is not None
+                and not re.fullmatch(r"[a-f0-9]{32}\.(part|blob)", after)
+            )
+        ):
+            raise ValueError("Invalid file retention bounds.")
         # A live publisher holds this inode lock through the database commit.
         # The sweep never removes a committed reference, including tombstones.
         with os.scandir(self.root) as entries:
-            for entry in entries:
-                if not re.fullmatch(r"[a-f0-9]{32}\.(part|blob)", entry.name):
-                    continue
-                try:
-                    with os.fdopen(
-                        os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW), "rb"
-                    ) as file:
-                        fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        if now.timestamp() - os.fstat(
-                            file.fileno()
-                        ).st_mtime >= 3600 and not records.referenced(entry.name[:32]):
-                            Path(entry.path).unlink(missing_ok=True)
-                except FileNotFoundError, BlockingIOError:
-                    continue
+            names = nsmallest(
+                limit + 1,
+                (
+                    entry.name
+                    for entry in entries
+                    if re.fullmatch(r"[a-f0-9]{32}\.(part|blob)", entry.name)
+                    and (after is None or entry.name > after)
+                    and entry.is_file(follow_symlinks=False)
+                ),
+            )
+        removed = 0
+        for name in names[:limit]:
+            path = self.root / name
+            try:
+                with os.fdopen(
+                    os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb"
+                ) as file:
+                    fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if now.timestamp() - os.fstat(
+                        file.fileno()
+                    ).st_mtime >= hours * 3600 and not records.referenced(name[:32]):
+                        if not dry_run:
+                            path.unlink(missing_ok=True)
+                        removed += 1
+            except FileNotFoundError, BlockingIOError:
+                continue
+        return (
+            removed,
+            min(limit, len(names)),
+            names[limit - 1] if len(names) > limit else None,
+        )
 
 
 def main() -> None:

@@ -459,11 +459,10 @@ Cleanup removes at most 100 private tasks and 10 document blobs per step. Privat
 records remain available to the cleanup worker until their task references and blobs
 are removed. Missing files are harmless; a crash after unlinking retries the same
 step. Storage/database failures use the durable worker retry policy with ten attempts;
-exhausted cleanup remains failed for operator retry after fixing the cause. Missing
+exhausted cleanup remains failed until the retention command retries it after the cause is fixed. Missing
 storage configuration never permits discarding database references to existing blobs.
 Uncommitted staging files use the separate storage-sweep command documented below,
-with its one-hour grace period and active-upload protection; scheduled sweeping
-belongs to #65.
+with its one-hour minimum grace period and active-upload protection.
 
 The purge removes identities/sessions, verification/recovery tokens and protected
 mail, bound OAuth/linking state, uploads and parsed text, proposals/provenance, profile
@@ -476,10 +475,57 @@ task and rate-limit records follow their separate retention policies.
 
 This covers the live database and private volume. Encrypted backup copies remain
 until the operator's separately configured backup-retention expiry; restoring a backup
-must reconcile subsequent deletions before reopening access. Automated retention and
-backup/restore runbooks belong to #65 and #72. Mail and AI providers may retain data
+must reconcile subsequent deletions before reopening access. Retention invocation is
+documented below; backup/restore runbooks belong to #72. Mail and AI providers may retain data
 already received under their own policies; this endpoint cannot recall messages or
 erase provider-held copies. No backup or external-provider deletion is claimed.
+
+### Retention maintenance
+
+Run one preview batch with the API's database settings and an existing private document root:
+
+```sh
+uv run --directory backend --locked python -m job_hunter.infrastructure.retention
+```
+
+Add `--apply` to perform cleanup. JSON contains the phase, counts, scanned/protected/contended
+totals and an opaque checkpoint. Pass a non-null value with `--checkpoint TOKEN` on the next
+invocation, using the same configuration and mode. Null means the pass is finished; begin
+the next pass without a checkpoint. Dry runs preserve records, files and task generations.
+The checkpoint freezes age cutoffs and cannot cross preview/apply modes or policy changes.
+
+Configure integer environment variables with the `JOB_HUNTER_RETENTION_` prefix:
+
+| Suffix | Default | Retention basis |
+| --- | ---: | --- |
+| `ACTION_HOURS` | 24 | Hours after verification/recovery/OIDC expiry |
+| `SESSION_HOURS` | 24 | Hours after session expiry or revocation |
+| `RATE_HOURS` | 1 | Hours after rate-bucket expiry; keep the hashing secret |
+| `MAIL_HOURS` | 0 | Hours after successful delivery; normal publication already erases payloads |
+| `FILE_HOURS` | 24 | Hours since orphan file modification; minimum 1 |
+| `TASK_HOURS` | 720 | Hours since an eligible terminal task's last update; minimum 1 |
+| `RETRY_HOURS` | 1 | Minimum tombstone age and failed cleanup retry interval |
+| `ARTIFACT_DAYS` | 30 | Snapshot age, with the protections described below |
+| `BATCH_SIZE` | 20 | Candidates per invocation, range 1–100 |
+
+Hour limits are 0–87600; file/task/retry hours require at least 1. Artifact days are 1–3650.
+Counts identify primary records processed; token deletion also removes its at-most-one
+encrypted delivery payload. Files use inode locks and recheck every committed reference,
+including tombstones. Directory enumeration uses bounded memory; its time depends on the
+directory size, while file openings/reference checks/deletions are batch-limited.
+Running token/mail tasks, even with expired leases, remain protected for worker recovery.
+Terminal task cleanup only removes recognized private kinds with absent subjects and no
+crawl/retry receipts. Unknown/public tasks and keys with existing subjects remain durable.
+Tombstones re-enqueue missing cleanup tasks or retry failed generations; live work is retained.
+The existing worker performs private deletion; accepted facts and other owners' public jobs
+keep their existing deletion/evidence contracts. This command makes no provider calls.
+
+Invoke hourly through the existing scheduler, persisting the last successful checkpoint for
+the next invocation; when null, start a fresh pass next hour. A database failure rolls back
+that batch. After any failure or lost output, retry the same input checkpoint; file unlink
+and task recovery are repeatable. New passes revisit busy rows and files created before an
+earlier cursor. This adds no scheduler service or recurring user searches. The artifact
+phase delegates to the command below with its separate 10000-row graph limit.
 
 ### Old public processing artifacts
 
@@ -514,7 +560,7 @@ Graphs larger than the row budget are retained and reported as oversized; increa
 the budget within its bound and start another pass. Graphs exceeding 10000 rows
 remain retained. A database error rolls back the whole batch: retry the same input
 checkpoint. Repetition is safe; no external provider calls occur during cleanup.
-This command is artifact-only; overall retention and tombstone recovery belong to #65.
+This command is artifact-only; overall retention and tombstone recovery use the command above.
 Real PostgreSQL tests in `backend/tests/test_artifact_retention.py` cover pipeline
 replay, shared/private evidence, lease/publication races, bounded continuation and rollback.
 
@@ -690,10 +736,10 @@ API/worker service account only; files use 0600. Unconfigured document storage r
 Errors: 60-second timeout 408, oversize 413, invalid content 415, quota/tombstone 409, storage failure 503.
 Quotas count committed documents and tombstones; checks serialize per owner. Temporary use is bounded per request.
 Document creation and `document_parse` enqueue commit together; the configured worker consumes these tasks.
-Schedule `uv run --directory backend --locked python -m job_hunter.infrastructure.documents` hourly
-with the same database/storage settings on the same filesystem with working POSIX locks. It scans without
-loading all files. It removes unreferenced blobs older than one hour, preserving active uploads and committed
-references (including tombstones). Uncertain commits retain blobs until references can be checked; retry failed sweeps.
+Use retention maintenance above for checkpointed scheduling on a filesystem with working POSIX locks.
+The legacy `uv run --directory backend --locked python -m job_hunter.infrastructure.documents` command
+applies one storage-only batch of up to 100 candidates with a one-hour grace period. Both preserve
+active uploads and committed references, including tombstones and uncertain upload commits.
 
 Verified owners DELETE `/{id}` with Origin/CSRF headers. The transaction tombstones the document,
 cancels and fences unfinished parsing/extraction, marks accepted evidence unavailable and enqueues cleanup.
