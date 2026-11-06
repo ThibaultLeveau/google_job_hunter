@@ -20,7 +20,7 @@ export function Button({
 }
 
 type InputProps = Omit<ComponentPropsWithRef<'input'>, 'type' | 'children'> & {
-  type?: 'text' | 'email' | 'password' | 'search' | 'tel' | 'url' | 'number';
+  type?: 'text' | 'email' | 'password' | 'search' | 'tel' | 'url' | 'number' | 'date';
 };
 
 export function Input({ className = '', ...props }: InputProps) {

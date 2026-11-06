@@ -2,7 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'vitest';
 import type { components } from '../../../generated/api';
 import App from '../../App';
 import { api, sessionKey, type Session } from '../../shared/api';
@@ -24,6 +24,16 @@ function mount() {
   window.history.replaceState(null, '', '/profile'); api.acceptSession(current);
   return render(<QueryClientProvider client={api.queryClient}><App /></QueryClientProvider>);
 }
+beforeAll(() => {
+  Object.defineProperties(HTMLDialogElement.prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
+  });
+});
+afterAll(() => {
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
+});
 beforeEach(() => {
   api.clearSession(); api.queryClient.clear(); current = owner; snapshot = { id: owner.id, revision: 0, facts: [] };
   api.queryClient.setQueryDefaults(sessionKey, { retry: false });
@@ -179,4 +189,154 @@ test('clears cached facts and drafts on account change and ignores late mutation
   expect(api.queryClient.getQueryData(['profile', owner.id])).toBeUndefined();
   expect(api.queryClient.getMutationCache().getAll()).toHaveLength(0);
   expect(screen.queryByText('First account secret')).not.toBeInTheDocument(); expect(screen.queryByText('Skill added.')).not.toBeInTheDocument();
+});
+
+test.each(['experience', 'project'] as const)('creates, edits and confirms removal of %s with keyboard focus restoration', async kind => {
+  const user = userEvent.setup(); const deferred = gate(); let removals = 0;
+  server.use(http.post(path + '/facts', async ({ request }) => {
+    const body = await request.json() as components['schemas']['FactWrite'];
+    expect(body.expected_revision).toBe(0); expect(request.headers.get('x-csrf-token')).toBe(owner.csrf_token);
+    expect(body.fact).toEqual({ kind, ...(kind === 'experience' ? { company: 'Acme', title: 'Engineer' } : { name: 'Atlas', url: null }),
+      start_date: null, end_date: null, ongoing: null, description: null });
+    const created = fact(body.fact); snapshot = { ...snapshot, revision: 1, facts: [created] };
+    return HttpResponse.json({ outcome: 'created', revision: 1, fact: created });
+  }), http.put(path + '/facts/:id', async ({ request, params }) => {
+    const body = await request.json() as components['schemas']['FactWrite'];
+    expect(body.expected_revision).toBe(1); expect(body.fact).toMatchObject({ start_date: '2020-01-01', end_date: '2022-03-04', ongoing: false, description: 'Manual description' });
+    const updated = fact(body.fact, { id: String(params.id) }); snapshot = { ...snapshot, revision: 2, facts: [updated] };
+    return HttpResponse.json({ outcome: 'updated', revision: 2, fact: updated });
+  }), http.delete(path + '/facts/:id', async ({ request }) => {
+    removals++; expect(new URL(request.url).searchParams.get('expected_revision')).toBe('2');
+    await deferred.pending; snapshot = { ...snapshot, revision: 3, facts: [] };
+    return HttpResponse.json({ outcome: 'deleted', revision: 3, fact: null });
+  }));
+  mount(); const add = await screen.findByRole('button', { name: `Add ${kind}` });
+  add.focus(); await user.keyboard('{Enter}');
+  const dialog = await screen.findByRole('dialog', { name: `Add ${kind}` });
+  const name = within(dialog).getByLabelText(kind === 'experience' ? 'Company' : 'Project name', { exact: false });
+  expect(name).toHaveFocus(); await user.type(name, kind === 'experience' ? 'Acme' : 'Atlas');
+  if (kind === 'experience') await user.type(within(dialog).getByLabelText(/Job title/), 'Engineer');
+  await user.type(within(dialog).getByLabelText('Description (optional)'), '   ');
+  await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+  await waitFor(() => { expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(add).toHaveFocus(); });
+  const edit = screen.getByRole('button', { name: `Edit ${kind}` }); await user.click(edit);
+  const editing = await screen.findByRole('dialog', { name: `Edit ${kind}` });
+  fireEvent.change(within(editing).getByLabelText('Start date (optional)'), { target: { value: '2020-01-01' } });
+  fireEvent.change(within(editing).getByLabelText('End date (optional)'), { target: { value: '2022-03-04' } });
+  await user.selectOptions(within(editing).getByRole('combobox', { name: 'Ongoing?' }), 'no');
+  await user.clear(within(editing).getByLabelText('Description (optional)')); await user.type(within(editing).getByLabelText('Description (optional)'), 'Manual description');
+  await user.click(within(editing).getByRole('button', { name: 'Save changes' }));
+  await waitFor(() => { expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(edit).toHaveFocus(); });
+  const remove = screen.getByRole('button', { name: `Remove ${kind}` }); await user.click(remove);
+  expect(await screen.findByRole('dialog', { name: `Remove ${kind}` })).toHaveTextContent('source document is kept');
+  expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+  fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true })); expect(remove).toHaveFocus(); expect(removals).toBe(0);
+  await user.keyboard('{Enter}'); await user.tab(); expect(screen.getByRole('button', { name: 'Confirm removal' })).toHaveFocus();
+  await user.keyboard('{Enter}'); expect(await screen.findByRole('button', { name: 'Removing…' })).toBeDisabled();
+  fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true })); expect(screen.getByRole('dialog')).toBeVisible();
+  deferred.release(); await waitFor(() => { expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(add).toHaveFocus(); }); expect(removals).toBe(1);
+});
+
+test('associates required/date errors and rejects reversed dates or an ongoing end date', async () => {
+  const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Add experience' }));
+  const dialog = screen.getByRole('dialog'); const save = within(dialog).getByRole('button', { name: 'Save changes' });
+  await user.click(save); expect(within(dialog).getByLabelText(/Company/)).toHaveAccessibleDescription('Error: Enter 1–200 characters.');
+  expect(within(dialog).getByLabelText(/Company/)).toHaveFocus();
+  await user.type(within(dialog).getByLabelText(/Company/), 'Acme'); await user.type(within(dialog).getByLabelText(/Job title/), 'Engineer');
+  fireEvent.change(within(dialog).getByLabelText('Start date (optional)'), { target: { value: '2025-01-02' } });
+  const end = within(dialog).getByLabelText('End date (optional)'); fireEvent.change(end, { target: { value: '2025-01-01' } });
+  await user.click(save); expect(end).toHaveAccessibleDescription(/on or after start date/); expect(end).toHaveFocus();
+  fireEvent.change(end, { target: { value: '2025-01-03' } }); await user.selectOptions(within(dialog).getByRole('combobox'), 'yes');
+  await user.click(save); expect(end).toHaveAccessibleDescription(/Clear the end date/);
+  fireEvent.change(end, { target: { value: '' } });
+  server.use(http.post(path + '/facts', async ({ request }) => {
+    expect(await request.json()).toMatchObject({ fact: { ongoing: true, end_date: null } });
+    return HttpResponse.json({ outcome: 'created', revision: 1, fact: null });
+  }));
+  await user.click(save); await waitFor(() => { expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); });
+});
+
+test.each(['javascript:alert(1)', 'https://user:password@example.org', 'not a URL'])('rejects unsafe project URL %s without sending a request', async url => {
+  const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Add project' }));
+  const dialog = screen.getByRole('dialog'); await user.type(within(dialog).getByLabelText(/Project name/), 'Atlas');
+  const link = within(dialog).getByLabelText('Project link (optional)'); await user.type(link, url);
+  await user.click(within(dialog).getByRole('button', { name: 'Save changes' })); expect(link).toHaveAccessibleDescription(/HTTP or HTTPS/); expect(link).toHaveFocus();
+  await user.click(within(dialog).getByRole('button', { name: 'Cancel' })); expect(screen.getByRole('button', { name: 'Add project' })).toHaveFocus();
+});
+
+test('keeps edited values through conflict and failed reload, then saves against the explicitly refreshed revision', async () => {
+  const original = fact({ kind: 'project', name: 'Atlas', url: 'https://example.org', ongoing: false }, {
+    source_associations: [{ document_id: documentId, source_version: 1, language: 'en', locator: 'page:1', quote: 'Atlas' }],
+  }); snapshot = { ...snapshot, revision: 1, facts: [original] }; let saves = 0;
+  server.use(http.put(path + '/facts/:id', async ({ request }) => {
+    saves++; const body = await request.json() as components['schemas']['FactWrite'];
+    if (saves === 1) { expect(body.expected_revision).toBe(1); snapshot.revision = 3; return failure(409); }
+    expect(body).toMatchObject({ expected_revision: 3, fact: { kind: 'project', name: 'My unsaved title', url: 'https://example.org' } });
+    snapshot = { ...snapshot, revision: 4, facts: [fact(body.fact, { id: original.id, user_fields: ['name'] })] };
+    return HttpResponse.json({ outcome: 'updated', revision: 4, fact: snapshot.facts?.[0] });
+  }));
+  const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Edit project' }));
+  const dialog = screen.getByRole('dialog'); const name = within(dialog).getByLabelText(/Project name/);
+  expect(name).toHaveValue('Atlas'); expect(within(dialog).getByText('Atlas', { selector: 'blockquote' })).toBeInTheDocument();
+  await user.clear(name); await user.type(name, 'My unsaved title'); await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(/profile changed/); expect(name).toHaveValue('My unsaved title');
+  expect(within(dialog).getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  server.use(http.get(path, () => failure(503))); await user.click(within(dialog).getByRole('button', { name: 'Reload latest facts' }));
+  expect(await within(dialog).findByText(/latest profile could not be loaded/)).toBeVisible(); expect(name).toHaveValue('My unsaved title');
+  server.use(http.get(path, () => HttpResponse.json(snapshot))); await user.click(within(dialog).getByRole('button', { name: 'Reload latest facts' }));
+  expect(await within(dialog).findByText(/Latest facts loaded/)).toBeVisible(); expect(name).toHaveValue('My unsaved title'); expect(saves).toBe(1);
+  await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+  expect(await screen.findByRole('heading', { name: 'My unsaved title' })).toBeVisible();
+  await waitFor(() => { expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); }); expect(saves).toBe(2);
+});
+
+test('shows server duplicate results and retains the saved fact without browser deduplication', async () => {
+  const original = fact({ kind: 'project', name: 'Atlas' }); snapshot.facts = [original]; let calls = 0;
+  server.use(http.post(path + '/facts', async ({ request }) => {
+    calls++; expect(await request.json()).toMatchObject({ fact: { name: '  ATLAS  ' } });
+    return HttpResponse.json({ outcome: 'existing', revision: 0, fact: original });
+  }));
+  const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Add project' }));
+  await user.type(screen.getByLabelText(/Project name/), '  ATLAS  '); await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(await screen.findByText('This fact already exists. The saved values were kept.')).toBeVisible();
+  await waitFor(() => { expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); });
+  expect(screen.getAllByRole('heading', { name: 'Atlas' })).toHaveLength(1); expect(calls).toBe(1);
+});
+
+test.each([422, 503])('retains project values after a %i failure and prevents repeated saves while pending', async status => {
+  const deferred = gate(); let calls = 0;
+  server.use(http.post(path + '/facts', async () => { calls++; await deferred.pending; return failure(status); }));
+  const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Add project' }));
+  const dialog = screen.getByRole('dialog'); const name = within(dialog).getByLabelText(/Project name/); await user.type(name, 'Unsaved');
+  await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+  expect(await within(dialog).findByRole('button', { name: 'Saving…' })).toBeDisabled(); fireEvent(dialog, new Event('cancel', { cancelable: true }));
+  const form = dialog.querySelector('form'); if (!form) throw new Error('Missing editor form'); fireEvent.submit(form); expect(calls).toBe(1);
+  deferred.release(); expect(await within(dialog).findByRole('alert')).not.toHaveTextContent('Private server message'); expect(name).toHaveValue('Unsaved');
+});
+
+test('retains a removed fact draft but prevents saving after conflict reload confirms it is gone', async () => {
+  const original = fact({ kind: 'project', name: 'Atlas' }); snapshot.facts = [original];
+  server.use(http.put(path + '/facts/:id', () => { snapshot = { ...snapshot, revision: 2, facts: [] }; return failure(404); }));
+  const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Edit project' }));
+  const dialog = screen.getByRole('dialog'); await user.type(within(dialog).getByLabelText(/Project name/), ' draft');
+  await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+  await user.click(await within(dialog).findByRole('button', { name: 'Reload latest facts' }));
+  expect(await within(dialog).findByText(/This fact was removed elsewhere/)).toBeVisible();
+  expect(within(dialog).getByLabelText(/Project name/)).toHaveValue('Atlas draft'); expect(within(dialog).getByRole('button', { name: 'Save changes' })).toBeDisabled();
+});
+
+test('closes the private editor and clears its draft when the session expires', async () => {
+  const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Add project' }));
+  await user.type(screen.getByLabelText(/Project name/), 'Private editor draft'); current = null;
+  server.use(http.post(path + '/facts', () => failure(401))); await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(await screen.findByText(/Your session has expired/)).toBeVisible(); expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(api.queryClient.getQueryData(['profile', owner.id])).toBeUndefined();
+});
+
+test('wraps Tab and Shift+Tab within the editor', async () => {
+  const user = userEvent.setup(); mount(); await user.click(await screen.findByRole('button', { name: 'Add project' }));
+  const dialog = screen.getByRole('dialog'); const first = within(dialog).getByLabelText(/Project name/);
+  const last = within(dialog).getByRole('button', { name: 'Save changes' });
+  expect(first).toHaveFocus(); await user.tab({ shift: true }); expect(last).toHaveFocus();
+  await user.tab(); expect(first).toHaveFocus();
 });

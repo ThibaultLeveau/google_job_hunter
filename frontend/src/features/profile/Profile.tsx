@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { components } from '../../../generated/api';
 import { api, ApiError } from '../../shared/api';
 import { Badge, Button, Field, StatePanel } from '../../shared/ui';
+import { FactEditor, type EditorTarget } from './FactEditor';
 
 type Snapshot = components['schemas']['ProfileSnapshot'];
 type Fact = components['schemas']['ProfileFact'];
@@ -52,6 +53,17 @@ export function Profile({ ownerId }: { ownerId: string }) {
   const [name, setName] = useState('');
   const [invalid, setInvalid] = useState(false);
   const [notice, setNotice] = useState('');
+  const [editor, setEditor] = useState<EditorTarget | null>(null);
+  const restoreFocus = useRef<EditorTarget | null>(null);
+  useLayoutEffect(() => {
+    const previous = restoreFocus.current;
+    if (editor || !previous) return;
+    restoreFocus.current = null;
+    const target = previous.opener.isConnected && !previous.opener.matches(':disabled')
+      ? previous.opener : document.getElementById(`profile-add-${previous.kind}`);
+    if (target && !target.matches(':disabled')) target.focus();
+    else document.getElementById(`profile-${previous.kind}`)?.focus();
+  }, [editor]);
   const input = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
   const mutation = useMutation({
@@ -94,6 +106,7 @@ export function Profile({ ownerId }: { ownerId: string }) {
     action={profile.isError && <Button loading={profile.isFetching} onClick={() => { void profile.refetch(); }}>Try again</Button>} />;
 
   const snapshot = profile.data;
+  const edited = editor?.fact ? (snapshot.facts ?? []).find(fact => fact.id === editor.fact?.id) : undefined;
   return <div className="profile-content">
     <p>Your accepted facts guide job evaluations. Changing them will require evaluations to refresh.</p>
     <p role="status" aria-atomic="true">{notice}</p>
@@ -126,11 +139,32 @@ export function Profile({ ownerId }: { ownerId: string }) {
       </li>)}</ul>
     </section>
     {(['experience', 'project'] as const).map(kind => <section key={kind} aria-labelledby={`profile-${kind}`}>
-      <h2 id={`profile-${kind}`}>{kind === 'experience' ? 'Experience' : 'Projects'}</h2>
+      <h2 id={`profile-${kind}`} tabIndex={-1}>{kind === 'experience' ? 'Experience' : 'Projects'}</h2>
+      <Button id={`profile-add-${kind}`} tone="secondary" disabled={blocked} onClick={event => {
+        setEditor({ kind, fact: null, remove: false, revision: snapshot.revision, opener: event.currentTarget });
+      }}>Add {kind}</Button>
       {!(snapshot.facts ?? []).some(fact => fact.data.kind === kind) && <p>No accepted {kind === 'experience' ? 'experience' : 'projects'} yet.</p>}
       <ul className="profile-facts">{(snapshot.facts ?? []).filter(fact => fact.data.kind === kind).map(fact => <li key={fact.id}>
         <FactDetails fact={fact} /><Evidence fact={fact} />
+        <div className="profile-editor-actions">
+          <Button tone="secondary" disabled={blocked} onClick={event => {
+            setEditor({ kind, fact, remove: false, revision: snapshot.revision, opener: event.currentTarget });
+          }}>Edit {kind}</Button>
+          <Button tone="secondary" disabled={blocked} onClick={event => {
+            setEditor({ kind, fact, remove: true, revision: snapshot.revision, opener: event.currentTarget });
+          }}>Remove {kind}</Button>
+        </div>
       </li>)}</ul>
     </section>)}
+    {editor && <FactEditor target={editor} missing={Boolean(editor.fact && !edited)}
+      evidence={edited && <div><FactDetails fact={edited} /><Evidence fact={edited} /></div>}
+      reload={async () => { const result = await profile.refetch(); if (!result.isSuccess) throw new Error('Profile reload failed'); return result.data; }}
+      saved={async result => {
+        setNotice(result.outcome === 'existing' ? 'This fact already exists. The saved values were kept.'
+          : result.outcome === 'deleted' ? 'Fact removed.' : 'Fact saved.');
+        await api.queryClient.invalidateQueries({ queryKey, exact: true });
+      }} close={() => {
+        restoreFocus.current = editor; setEditor(null);
+      }} />}
   </div>;
 }
