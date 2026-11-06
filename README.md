@@ -1228,6 +1228,29 @@ run IDs return 404; invalid filters return 422 and unavailable storage returns a
 Job query strings are removed from the transport scope used by application-server access logs;
 configure upstream proxies to omit query strings as well.
 
+### Job details and retry actions
+
+`GET /api/v1/jobs/{job_id}` returns preserved source paragraphs, clean text,
+metadata citations, requirements and the signed-in owner's match. Artifact IDs,
+source hashes and paragraph IDs identify the evidence revision. Missing artifacts
+remain null; readiness flags are independent. Removed sources have explicit
+`removed` freshness and evidence only when available for that revision. Previous
+matches remain visible with a stale flag when source or profile revisions change.
+
+`GET /api/v1/jobs/{job_id}/status` returns the compact stage timeline, safe reason
+codes, timestamps and remaining retry allowances. It excludes provider prompts,
+task payloads and other owners' activity. Inaccessible jobs return 404.
+
+Verified users may POST `/retry` under the job URL with `stage`, the status entry's
+`revision` and `expected_generation`, and a UUID `idempotency_key`. Retries reopen
+failed tasks atomically; simultaneous owners share the same reopened attempt.
+Unsupported terminal stages cannot be retried. Admission allows five requests per
+owner over a rolling 24 hours. POST `/reevaluate` with a UUID `idempotency_key`
+uses the existing private matching limit of three requests per rolling 24 hours.
+Both actions require the session's CSRF token, return 202 on admission, 409 for a
+stale or ineligible request, and 429 when the allowance is exhausted. Repeating an
+admitted key returns its original generation without spending another allowance.
+
 ### Provider budget ledger
 
 Approved prerequisite [#136](https://github.com/ThibaultLeveau/google_job_hunter/issues/136)

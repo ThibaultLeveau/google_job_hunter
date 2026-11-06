@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -32,6 +33,7 @@ from job_hunter.infrastructure.matches import (
 )
 from job_hunter.infrastructure.matching import create_matcher
 from job_hunter.infrastructure.pipeline import PostgresPipeline
+from job_hunter.infrastructure.profiles import ProfileRecord
 from job_hunter.infrastructure.searches import SavedSearchRecord, SearchRunRecord
 from job_hunter.infrastructure.snapshots import PostgresSnapshots, SourceMergeRecord
 from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord, snapshot
@@ -290,8 +292,12 @@ class MatchSchedule:
                 self.now(),
             )
 
-    def status(self, owner: UUID, job: UUID) -> dict[str, object]:
-        with self.database.transaction() as session:
+    def status(
+        self, owner: UUID, job: UUID, *, session: Session | None = None
+    ) -> dict[str, object]:
+        with (
+            nullcontext(session) if session is not None else self.database.transaction()
+        ) as session:
             job = access(session, owner, job)
             aliases = select(SourceMergeRecord.old_id).where(
                 SourceMergeRecord.source_id == job
@@ -314,6 +320,8 @@ class MatchSchedule:
             )
             identity = None
             try:
+                if session.get(ProfileRecord, owner) is None:
+                    raise DomainError("conflict")
                 profile, inputs = self.repository.inputs(session, owner, job)
                 identity = session.scalar(
                     select(MatchIdentityRecord).filter_by(
@@ -345,6 +353,7 @@ class MatchSchedule:
                 "state": state,
                 "pending": pending,
                 "current": current is not None and not failed,
+                "stale": current is None and previous is not None,
                 "result": artifact.payload if artifact else None,
                 "reason": task.error_code if failed and task else None,
                 "reevaluations_remaining": self.allowance(session, owner),
