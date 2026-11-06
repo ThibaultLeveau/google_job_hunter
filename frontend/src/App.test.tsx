@@ -15,6 +15,7 @@ const denied = () => HttpResponse.json({ code: 'unauthenticated', message: 'Sign
   field_errors: [], request_id: 'bcb2f310-f4a5-4a2d-9871-a220704e5da8' }, { status: 401 });
 
 beforeEach(() => {
+  server.use(http.get('http://localhost/api/v1/searches', () => HttpResponse.json({ items: [], next_offset: null })));
   server.use(http.get('http://localhost/api/v1/profile', () => HttpResponse.json({ id: owner.id, revision: 0, facts: [] })));
   server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })));
   api.queryClient.setQueryDefaults(['auth-providers'], { retry: false });

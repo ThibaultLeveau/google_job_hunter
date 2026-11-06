@@ -452,3 +452,23 @@ section {
 .proposal-evidence blockquote { margin: 0; }
 .proposal-evidence figcaption { font-size: var(--text-sm); }
 .proposal-review summary { cursor: pointer; padding-block: var(--space-2); }
+
+.search-content { max-width: 58rem; }
+.search-list { list-style: none; padding: 0; display: grid; gap: var(--space-4); }
+.search-list > li, .search-editor {
+  padding: var(--space-6); border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel); background: var(--color-surface); min-width: 0;
+}
+.search-editor { margin-block: var(--space-6); }
+.search-fields { display: grid; gap: var(--space-4); border: 0; padding: 0; min-width: 0; }
+.search-fields > .ui-button { justify-self: start; }
+.search-group { min-width: 0; margin: 0; padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
+.search-group legend { font-weight: 650; max-width: 100%; }
+.search-term-row { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3); margin-block: var(--space-3); }
+.search-term-row .ui-field { flex: 1 1 16rem; }
+.search-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-block: var(--space-4); }
+.search-logic { line-height: 2; overflow-wrap: anywhere; margin-block: var(--space-3); }
+.search-term { background: var(--color-accent-soft); padding: var(--space-1) var(--space-2); border-radius: var(--radius-control); }
+.search-and { display: block; color: var(--color-accent); }
+.search-confirm { border-inline-start: 3px solid var(--color-border); padding-inline-start: var(--space-4); }
+.search-editor summary { cursor: pointer; padding-block: var(--space-2); }
