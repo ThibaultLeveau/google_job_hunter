@@ -345,6 +345,8 @@ class PostgresSearches:
                 .with_for_update()
                 .execution_options(populate_existing=True)
             ).one()
+            if live_user(session, owner) is None:
+                raise DomainError("not_found")
             if row.status in ("pending", "running"):
                 row.status, row.updated_at = "cancelled", self.now()
                 for task in tasks:

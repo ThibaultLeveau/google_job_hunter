@@ -72,6 +72,7 @@ class Account:
     recovery: str
     search: UUID
     run_key: UUID
+    run: UUID
 
 
 @pytest.fixture
@@ -110,11 +111,13 @@ def account(isolated_database: Database, owners: tuple[UUID, UUID]) -> Account:
     )
     searches = PostgresSearches(isolated_database, lambda: NOW, ())
     saved, key = searches.save(owner, DATA), uuid4()
-    searches.start(owner, saved.id, 1, key)
+    run = searches.start(owner, saved.id, 1, key)
     with isolated_database.transaction() as session:
         verification_hash = session.scalars(select(VerificationRecord.token_hash)).one()
         recovery_hash = session.scalars(select(RecoveryRecord.token_hash)).one()
-    return Account(owner, credential, verification_hash, recovery_hash, saved.id, key)
+    return Account(
+        owner, credential, verification_hash, recovery_hash, saved.id, key, run.id
+    )
 
 
 def tombstone(database: Database, owner: UUID) -> None:
@@ -198,6 +201,7 @@ def rejected_operation(name: str, database: Database, account: Account) -> None:
         "upload": lambda: PostgresDocuments(
             database, StorageSettings(), lambda: LATER
         ).add(owner, uuid4().hex, "a" * 64, "resume.txt", "text/plain", 10),
+        "cancel_search": lambda: searches.cancel(owner, account.run),
         "save_search": lambda: searches.save(owner, DATA),
         "edit_search": lambda: searches.save(owner, DATA, account.search, 1),
         "delete_search": lambda: searches.delete(owner, account.search, 1),
@@ -215,6 +219,7 @@ def rejected_operation(name: str, database: Database, account: Account) -> None:
         "save_search",
         "edit_search",
         "delete_search",
+        "cancel_search",
         "start_search",
         "replay_search",
     }:
@@ -243,6 +248,7 @@ def rejected_operation(name: str, database: Database, account: Account) -> None:
         "save_search",
         "edit_search",
         "delete_search",
+        "cancel_search",
         "start_search",
         "replay_search",
     ],

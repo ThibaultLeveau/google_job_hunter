@@ -402,9 +402,11 @@ Password proof shares login limits (5/account and 30/IP per five minutes); Googl
 
 [Issue #147](https://github.com/ThibaultLeveau/google_job_hunter/issues/147) makes
 `users.deleted_at` authoritative for password/Google sign-in, session reads,
-verification, recovery, reauthentication and explicit identity linking. Mutations
-lock and recheck the live user before identities, sessions or private child rows;
-a waiting operation rechecks the tombstone after the deletion transaction commits.
+verification, recovery, reauthentication and explicit identity linking. Authentication,
+upload and search-definition/run-creation writes lock and recheck the live user before
+child records. Run cancellation keeps the worker's task/run/user lock order and checks
+the same tombstone before writing. A waiting operation rechecks the account after
+the deletion transaction commits.
 Password hashing, Google exchanges and mail delivery remain outside these locks.
 Account-bound OAuth starts require the owner's active, unexpired session; anonymous
 sign-in starts retain their existing behavior. Upload publication and saved-search
