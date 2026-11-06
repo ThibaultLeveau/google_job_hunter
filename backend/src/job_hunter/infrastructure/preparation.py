@@ -29,11 +29,11 @@ PREPARATION_VERSION = (
 )
 INPUT_BYTES = 1024 * 1024
 SKIP = set(
-    "head script style nav footer aside form template iframe object embed "
+    "head script style nav footer aside template iframe object embed "
     "svg math canvas input button select textarea".split()
 )
 BLOCKS = set(
-    "p div article section main h1 h2 h3 h4 h5 h6 li ul ol dl dt dd "
+    "p div article section main form h1 h2 h3 h4 h5 h6 li ul ol dl dt dd "
     "blockquote pre br hr tr td th".split()
 )
 

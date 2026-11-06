@@ -975,7 +975,7 @@ crawling itself. Read discovery counters separately from later processing readin
 
 Issue #45 adds an internal preparation adapter and immutable `job_preparations` artifacts keyed by
 snapshot ID and policy/library/Python version. It uses [Beautiful Soup](https://www.crummy.com/software/BeautifulSoup/bs4/doc/)
-with the explicit HTML parser, discarding scripts, styles, navigation, forms, hidden content and
+with the explicit HTML parser, discarding scripts, styles, navigation, controls, hidden content and
 embedded active elements. Visible prose and list items retain document order and original language;
 inline text stays together. Ordinary content is `uncertain`, not a confirmed vacancy. Only exact
 error-page markers are `non_job`; empty, unsupported MIME/status/encoding and exceeded limits are explicit.

@@ -60,6 +60,11 @@ SNAPSHOT = UUID("12345678-1234-1234-1234-123456789012")
             ["Job title", "Work here"],
         ),
         ("https://example.org", ["https://example.org"]),
+        (
+            '<form action="/apply"><p>Send a CV and cover letter.</p>'
+            '<input name="cv"><button>Submit</button></form>',
+            ["Send a CV and cover letter."],
+        ),
         ("<p>Write &lt;script&gt; as plain text</p>", ["Write <script> as plain text"]),
     ],
 )
