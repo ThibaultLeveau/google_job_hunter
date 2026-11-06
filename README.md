@@ -734,6 +734,61 @@ Handlers must reserve/reconcile user and global budgets before paid calls and us
 idempotency where available, including any SDK retries. SMTP is the only external adapter; no paid calls exist yet.
 Tests inject clock/sleep and jitter, plus deterministic handlers, against real PostgreSQL.
 
+### Search preview
+
+Issue #35 adds `POST /api/v1/searches/preview`: a synchronous, authenticated, stateless preview.
+Send the session cookie, exact allowed `Origin` and `X-CSRF-Token`, as with other authenticated POSTs.
+This free preview permits unverified sessions; paid search execution remains verification-gated.
+It neither saves definitions nor executes searches. For example:
+
+```json
+{
+  "groups": [["Python", "Go"], ["data engineer"]],
+  "exclusions": ["recruitment agency"],
+  "sites": ["jobs.lever.co"],
+  "language": "fr",
+  "country": "fr",
+  "location": "Paris, France",
+  "recency_days": 30
+}
+```
+
+The response contains `query`, `provider_parameters` and explanatory `hints`. The example produces
+`("Python" OR "Go") AND ("data engineer") AND (site:jobs.lever.co) -"recruitment agency"`
+and separate `{"lr":"lang_fr","gl":"fr","location":"Paris, France","as_qdr":"d30"}` parameters.
+Every term is literal text; a multiword term becomes an exact-phrase hint. Supply phrases without
+surrounding quotes. NFKC normalization and collapsed spaces are deterministic; exact normalized
+duplicates within a group, exclusions or sites compile once in first-seen order. Case is preserved;
+groups are not flattened or deduplicated across AND boundaries.
+
+Limits are 1–6 nonempty groups, 1–8 terms per group, 32 keyword terms total before deduplication,
+8 exclusions, 4 sites, 80 characters per term/exclusion, 120 per location and 2,048 UTF-8 bytes for
+the compiled query. Lengths apply before and after normalization; recency is an integer from 1–365 days.
+Words may contain Unicode letters/numbers/marks/spaces and `+ # . , ' / -` (including C++, C# and CI/CD).
+Empty text, leading minus signs, controls, raw operators, double quotes, backslashes, URL schemes,
+`//`, `www.`, URL parameter syntax and unknown fields are rejected. Embedded double quotes are
+rejected because Google does not document reliable escaping; no backslash escape is invented.
+
+Sites must exactly match `JOB_HUNTER_SEARCH_ALLOWED_DOMAINS`, a JSON array of at most 100 ASCII
+domains; defaults are `linkedin.com`, `indeed.com`, `jobs.lever.co` and `boards.greenhouse.io`.
+An empty allowlist disables site filters. Input domains normalize to lowercase; wildcards, URLs,
+paths, ports, credentials and implicit subdomain matching are rejected. Google's resulting `site:`
+hint can include subdomains and is not a crawler authorization rule.
+
+Language/country codes use offline snapshots of SerpApi's [result languages](https://serpapi.com/google-lr-languages.json)
+and [countries](https://serpapi.com/google-countries.json), checked on 6 November 2026; omitted values
+remain unspecified. The [provider parameters](https://serpapi.com/search-api) and
+[recency parameter](https://serpapi.com/advanced-google-query-parameters) are separate values for a
+future adapter to encode, never a user-supplied URL. [Google query hints](https://support.google.com/websearch/answer/2466433?hl=en)
+may be rewritten or ignored: Boolean/phrase/site hints do not guarantee exact results, language is
+the result language, country/location describe search origin, and recency concerns document dates.
+None guarantees a job's location, remote eligibility, work authorization or posting date.
+Hard filtering on extracted job metadata is separate future behavior; the response states these limits.
+
+`uv run --locked pytest --require-database tests/test_searches.py` from `backend/` covers deterministic
+compilation, bounds, unsafe input and authenticated API round trips with local PostgreSQL sessions.
+It needs no provider credential or external service.
+
 | Available since | Working directory | Command contract |
 | --- | --- | --- |
 | [#20](https://github.com/ThibaultLeveau/google_job_hunter/issues/20) | `frontend/` | `npm run generate:api` exports deterministic OpenAPI and generates ignored declarations before checks/build/tests |

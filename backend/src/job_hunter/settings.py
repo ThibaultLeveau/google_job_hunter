@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict, SettingsError
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+from job_hunter.domain.searches import Domain
+
 
 class ConfigurationError(ValueError):
     """Invalid startup configuration with no submitted values in the message."""
@@ -27,6 +29,10 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
     )
     request_max_bytes: int = Field(default=1048576, ge=1, le=16777216)
+    search_allowed_domains: tuple[Domain, ...] = Field(
+        default=("linkedin.com", "indeed.com", "jobs.lever.co", "boards.greenhouse.io"),
+        max_length=100,
+    )
 
     @field_validator("trusted_hosts")
     @classmethod
