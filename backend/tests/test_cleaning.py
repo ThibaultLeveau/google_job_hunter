@@ -77,8 +77,10 @@ def service(transport: httpx.MockTransport, ledger: Accounting) -> AI:
 
 
 def test_langchain_selection_uses_guarded_source_and_exact_spans() -> None:
-    source, requests = prepared(), []
+    source, requests = prepared(TEXT.replace("Salary", "Privacy policy\nSalary")), []
     choice = selection(source)
+    choice["ordered"].remove(str(source.paragraphs[1].id))
+    choice["boilerplate"].append(str(source.paragraphs[1].id))
 
     def respond(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -87,7 +89,7 @@ def test_langchain_selection_uses_guarded_source_and_exact_spans() -> None:
         assert "untrusted source data" in body["messages"][0]["content"]
         envelope = json.loads(body["messages"][1]["content"])
         supplied = json.loads(envelope["untrusted_source"])
-        assert supplied[5]["text"] == source.paragraphs[5].text
+        assert supplied[6]["text"] == source.paragraphs[6].text
         return httpx.Response(200, json=completion(json.dumps(choice)))
 
     stage = CleanJob(
@@ -96,6 +98,9 @@ def test_langchain_selection_uses_guarded_source_and_exact_spans() -> None:
     result = stage.execute(source)
     verify(result.content, source)
     assert result.content.state == "cleaned" and len(requests) == 1
+    assert (
+        result.content.mappings[1].source_start > result.content.mappings[1].clean_start
+    )
     assert result.content.text == "\n\n".join(
         next(p.text for p in source.paragraphs if str(p.id) == key)
         for key in choice["ordered"]
@@ -216,6 +221,12 @@ def test_cache_revision_rollback_fidelity_and_migrations(
     assert store.run(preparation.id).id == first.id
     monkeypatch.setattr(stage, "execute", original)
     output = original(source)
+    with isolated_database.transaction() as session:
+        assert store.publish(session, preparation.id, output).id == first.id
+        assert store.publish(session, preparation.id, output).id == first.id
+        assert session.scalar(select(func.count()).select_from(CleaningCallRecord)) == 2
+    with pytest.raises(DBAPIError), isolated_database.transaction() as session:
+        session.execute(update(CleaningCallRecord).values(payload={}))
     with pytest.raises(ValueError), isolated_database.transaction() as session:
         store.publish(
             session,

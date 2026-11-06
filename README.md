@@ -1013,7 +1013,7 @@ Immutable artifacts reference their preparation revision and hash; cache identit
 prompt/schema and non-secret model/settings configuration. Reruns reuse committed artifacts, including
 degraded fallback; configuration/source changes produce new identities. Concurrent uncached runs can
 repeat calls before the unique publication commits (at-least-once delivery), but share one artifact.
-Each completed execution's call records commit separately from the winning artifact's usage list,
+Each completed execution's call records are stored separately from the winning artifact's usage list,
 so concurrent publication retains both executions' known usage. A crash before publication can still
 lose usage evidence; it never establishes zero cost. Model calls hold no database transaction.
 Worker orchestration and global budgets remain #51/#54;
