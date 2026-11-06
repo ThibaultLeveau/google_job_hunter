@@ -431,7 +431,7 @@ upload, extraction, fuzzy matching and profile screens remain their owning issue
 
 Verified sessions POST raw PDF, DOCX or UTF-8 TXT bytes to `/api/v1/documents` with the matching
 `Content-Type`, percent-encoded UTF-8 `X-Document-Name`, Origin and CSRF headers. The binary body streams;
-signature/container/encoding checks precede persistence. Parsing is #26; no deletion endpoint exists (#30).
+signature/container/encoding checks precede persistence. No deletion endpoint exists yet (#30).
 201 returns the queued document; exact same-owner bytes return the existing document with 200.
 GET the collection (100 items/page, `offset`), `/{id}` for status, or `/{id}/download` for an attachment.
 Foreign/missing/tombstoned IDs return 404. Filenames are sanitized metadata; keys, hashes and paths stay private.
@@ -441,11 +441,29 @@ API/worker service account only; files use 0600. Unconfigured document storage r
 (range 1–1073741824), and `QUOTA_COUNT` to 100 (range 1–1000), all with the same document prefix.
 Errors: 60-second timeout 408, oversize 413, invalid content 415, quota/tombstone 409, storage failure 503.
 Quotas count committed documents and tombstones; checks serialize per owner. Temporary use is bounded per request.
-Document creation and `document_parse` enqueue commit together; tasks wait for the parser handler.
+Document creation and `document_parse` enqueue commit together; the configured worker consumes these tasks.
 Schedule `uv run --directory backend --locked python -m job_hunter.infrastructure.documents` hourly
 with the same database/storage settings on the same filesystem with working POSIX locks. It scans without
 loading all files. It removes unreferenced blobs older than one hour, preserving active uploads and committed
 references (including tombstones). Uncertain commits retain blobs until references can be checked; retry failed sweeps.
+
+### Bounded document parsing
+
+The worker uses the same private volume and registers `document_parse` when storage is configured.
+PDF uses pinned [pypdf](https://pypdf.readthedocs.io/en/stable/user/extract-text.html), DOCX uses pinned
+[python-docx](https://python-docx.readthedocs.io/en/latest/api/document.html), and TXT uses strict UTF-8.
+Each parse runs in a fresh Python subprocess with a cleared environment, private temporary directory,
+10-second wall/CPU budget, 256 MiB address-space cap, 50 MiB input/expansion bounds, 100 PDF pages,
+10,000 segments, 1,000,000 characters and a 16 MiB output cap. Timeouts/cancellation kill and reap the
+child; temporary output is removed. This provides resource isolation, not an OS security sandbox.
+The API reports an allowlisted `parse_error`: `ocr_required` marks scanned PDFs as unsupported in v1.
+Provide encrypted files decrypted; replace empty/invalid files, or reduce limit/time failures in size/complexity.
+TXT lines and DOCX body paragraphs (including table cells) use `paragraph:N`; PDF uses `page:N`.
+Offsets are Unicode character ranges in canonical segment text joined by newlines, not source-byte offsets.
+DOCX headers/footers and layout previews are not extracted. Source language metadata is preserved;
+TXT language stays unknown. Artifacts retain source/text hashes, document/parser versions and engine versions.
+The worker reuses existing artifacts and checks lease/version plus owner/document tombstones before
+atomically saving text and completing the task. Parsed text remains private; extraction is #28.
 
 ### Local PostgreSQL and migrations
 
