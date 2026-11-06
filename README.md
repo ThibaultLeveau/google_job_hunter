@@ -481,6 +481,43 @@ backup/restore runbooks belong to #65 and #72. Mail and AI providers may retain 
 already received under their own policies; this endpoint cannot recall messages or
 erase provider-held copies. No backup or external-provider deletion is claimed.
 
+### Old public processing artifacts
+
+Preview one bounded cleanup batch from the repository root:
+
+```sh
+uv run --directory backend --locked python -m job_hunter.infrastructure.artifact_retention --retention-days 30 --scan-limit 20 --row-limit 10000
+```
+
+Set `JOB_HUNTER_DATABASE_URL` as for the API. `JOB_HUNTER_ARTIFACT_RETENTION_DAYS`
+sets the default age; the flag overrides it. Add `--apply` to delete eligible rows.
+JSON output contains per-table counts, scanned/protected/oversized/contended counts
+and a checkpoint, without source or provider payloads. Pass a non-null checkpoint
+back with `--checkpoint TOKEN` and the same age and mode until it becomes null.
+Dry-run checkpoints cannot authorize deletion: start a new apply pass. Checkpoints
+freeze the cutoff; a later pass starts without a checkpoint. Days must be 1–3650,
+scan limits 1–100 snapshots, and row limits 1–10000 total deleted rows per batch.
+
+Eligibility uses the snapshot fetch time, not a guessed artifact creation time.
+Current snapshots and all their derivatives remain protected, regardless of age or
+owner count. Historical private matches protect their source content/requirements;
+accepted profile facts, private document evidence and job associations are untouched.
+Pending/running/failed tasks (including expired leases), recently updated terminal
+tasks, mixed embedding receipts and unprovable eligibility protect the entire graph.
+Task keys remain durable to prevent duplicate delivery and repeated paid work.
+Crawl receipts and lineage references retain the original snapshot bytes; their
+unreferenced derivatives can expire. Global embedding-space definitions remain.
+
+Each graph is reclaimed atomically, with reference/lease rechecks and publication
+locks. Busy graphs are skipped without waiting; rerun a new pass to revisit them.
+Graphs larger than the row budget are retained and reported as oversized; increase
+the budget within its bound and start another pass. Graphs exceeding 10000 rows
+remain retained. A database error rolls back the whole batch: retry the same input
+checkpoint. Repetition is safe; no external provider calls occur during cleanup.
+This command is artifact-only; overall retention and tombstone recovery belong to #65.
+Real PostgreSQL tests in `backend/tests/test_artifact_retention.py` cover pipeline
+replay, shared/private evidence, lease/publication races, bounded continuation and rollback.
+
 ### Personal data export
 
 POST `/api/v1/account/export` with the session cookie, allowed Origin and CSRF header;
@@ -1787,7 +1824,8 @@ Listing an issue here does not authorize implementing it as part of issue #1.
 | 62a | [#147 Fence authentication and private writes for tombstoned accounts](https://github.com/ThibaultLeveau/google_job_hunter/issues/147) | Approved prerequisite for #63 | [#62](https://github.com/ThibaultLeveau/google_job_hunter/issues/62), [#18](https://github.com/ThibaultLeveau/google_job_hunter/issues/18), [#16](https://github.com/ThibaultLeveau/google_job_hunter/issues/16), [#25](https://github.com/ThibaultLeveau/google_job_hunter/issues/25), [#30](https://github.com/ThibaultLeveau/google_job_hunter/issues/30) |
 | 63 | [#63 Delete accounts and private data with race-safe cleanup](https://github.com/ThibaultLeveau/google_job_hunter/issues/63) | Operations and privacy | [#62](https://github.com/ThibaultLeveau/google_job_hunter/issues/62), [#25](https://github.com/ThibaultLeveau/google_job_hunter/issues/25), [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53), [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11), [#18](https://github.com/ThibaultLeveau/google_job_hunter/issues/18), [#16](https://github.com/ThibaultLeveau/google_job_hunter/issues/16), [#30](https://github.com/ThibaultLeveau/google_job_hunter/issues/30), [#147](https://github.com/ThibaultLeveau/google_job_hunter/issues/147) |
 | 64 | [#64 Build account settings for identity linking, export, and deletion](https://github.com/ThibaultLeveau/google_job_hunter/issues/64) | Operations and privacy | [#23](https://github.com/ThibaultLeveau/google_job_hunter/issues/23), [#62](https://github.com/ThibaultLeveau/google_job_hunter/issues/62), [#63](https://github.com/ThibaultLeveau/google_job_hunter/issues/63), [#17](https://github.com/ThibaultLeveau/google_job_hunter/issues/17), [#18](https://github.com/ThibaultLeveau/google_job_hunter/issues/18), [#30](https://github.com/ThibaultLeveau/google_job_hunter/issues/30) |
-| 65 | [#65 Expire temporary data, stale artifacts, and abandoned tasks safely](https://github.com/ThibaultLeveau/google_job_hunter/issues/65) | Operations and privacy | [#63](https://github.com/ThibaultLeveau/google_job_hunter/issues/63), [#54](https://github.com/ThibaultLeveau/google_job_hunter/issues/54) |
+| 64a | [#151 Reclaim unreferenced old processing artifacts](https://github.com/ThibaultLeveau/google_job_hunter/issues/151) | Approved prerequisite for #65 | [#63](https://github.com/ThibaultLeveau/google_job_hunter/issues/63), [#54](https://github.com/ThibaultLeveau/google_job_hunter/issues/54), [#64](https://github.com/ThibaultLeveau/google_job_hunter/issues/64) |
+| 65 | [#65 Expire temporary data, stale artifacts, and abandoned tasks safely](https://github.com/ThibaultLeveau/google_job_hunter/issues/65) | Operations and privacy | [#63](https://github.com/ThibaultLeveau/google_job_hunter/issues/63), [#54](https://github.com/ThibaultLeveau/google_job_hunter/issues/54), [#151](https://github.com/ThibaultLeveau/google_job_hunter/issues/151) |
 | 66 | [#66 Compose a deterministic real-stack test harness and external fixtures](https://github.com/ThibaultLeveau/google_job_hunter/issues/66) | End-to-end quality | [#15](https://github.com/ThibaultLeveau/google_job_hunter/issues/15), [#17](https://github.com/ThibaultLeveau/google_job_hunter/issues/17), [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27), [#37](https://github.com/ThibaultLeveau/google_job_hunter/issues/37), [#43](https://github.com/ThibaultLeveau/google_job_hunter/issues/43), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51) |
 | 67 | [#67 Run Playwright against the real local stack in GitHub Actions](https://github.com/ThibaultLeveau/google_job_hunter/issues/67) | End-to-end quality | [#5](https://github.com/ThibaultLeveau/google_job_hunter/issues/5), [#8](https://github.com/ThibaultLeveau/google_job_hunter/issues/8), [#21](https://github.com/ThibaultLeveau/google_job_hunter/issues/21), [#66](https://github.com/ThibaultLeveau/google_job_hunter/issues/66) |
 | 68 | [#68 Verify authentication and profile review through full browser journeys](https://github.com/ThibaultLeveau/google_job_hunter/issues/68) | End-to-end quality | [#67](https://github.com/ThibaultLeveau/google_job_hunter/issues/67), [#34](https://github.com/ThibaultLeveau/google_job_hunter/issues/34), [#23](https://github.com/ThibaultLeveau/google_job_hunter/issues/23) |
