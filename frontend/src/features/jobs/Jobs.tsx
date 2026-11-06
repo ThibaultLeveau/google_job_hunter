@@ -4,6 +4,8 @@ import { Link, useLocation, useSearchParams } from 'react-router';
 import type { components } from '../../../generated/api';
 import { api, ApiError, sessionKey, type Session } from '../../shared/api';
 import { Badge, Button, StatePanel } from '../../shared/ui';
+import { JobFilters } from './JobFilters';
+import { filterErrors, filterParams, readFilters, sortLabels } from './jobFilters';
 
 type Job = components['schemas']['JobSummary'];
 type Page = components['schemas']['JobPage'];
@@ -46,10 +48,14 @@ const analysisLabels: Record<Job['analysis_status'], string> = {
 
 export function Jobs({ ownerId }: { ownerId: string }) {
   const location = useLocation(), [params, setParams] = useSearchParams();
-  const cursor = params.get('cursor') ?? '';
-  const heading = useRef<HTMLHeadingElement>(null), reset = useRef<HTMLButtonElement>(null), previous = useRef(cursor);
-  const query = useQuery({ queryKey: ['jobs', ownerId, cursor], staleTime: 30000, retry: false, refetchOnWindowFocus: false,
-    queryFn: ({ signal }) => api.request<Page>(`/api/v1/jobs?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal })
+  const cursor = params.get('cursor') ?? '', errors = filterErrors(params), valid = !Object.keys(errors).length;
+  const filters = readFilters(params), values = filterParams(filters);
+  const filtered = [...values.keys()].some(key => key !== 'sort' && !key.startsWith('include_unknown_'));
+  values.set('limit', '20'); if (cursor) values.set('cursor', cursor);
+  const request = values.toString();
+  const heading = useRef<HTMLHeadingElement>(null), reset = useRef<HTMLButtonElement>(null), pageFocus = useRef(false);
+  const query = useQuery({ queryKey: ['jobs', ownerId, request], enabled: valid, staleTime: 30000, retry: false, refetchOnWindowFocus: false,
+    queryFn: ({ signal }) => api.request<Page>(`/api/v1/jobs?${request}`, { signal })
       .catch((error: unknown) => { if (error instanceof ApiError && [401, 403].includes(error.status)) void api.invalidateSession(); throw error; }) });
   useEffect(() => () => {
     if (api.queryClient.getQueryData<Session | null>(sessionKey)?.id !== ownerId) {
@@ -61,8 +67,7 @@ export function Jobs({ ownerId }: { ownerId: string }) {
   const prior = typeof history === 'object' && history !== null && 'jobCursors' in history && Array.isArray(history.jobCursors)
     ? history.jobCursors.filter((value): value is string => typeof value === 'string').slice(-100) : [];
   useEffect(() => {
-    if (!query.isPending && previous.current !== cursor) (heading.current ?? reset.current)?.focus();
-    if (!query.isPending) previous.current = cursor;
+    if (!query.isPending && pageFocus.current) { (heading.current ?? reset.current)?.focus(); pageFocus.current = false; }
   }, [cursor, query.isPending]);
   const restored = useRef<string | null>(null);
   useEffect(() => {
@@ -72,24 +77,27 @@ export function Jobs({ ownerId }: { ownerId: string }) {
     if (position !== undefined) window.scrollTo({ top: position, behavior: 'instant' });
   }, [ownerId, location.key, location.search, query.data]);
   function page(next: string, stack: string[]) {
+    pageFocus.current = true;
     const values = new URLSearchParams(params);
     if (next) values.set('cursor', next); else values.delete('cursor');
     setParams(values, { state: { jobCursors: stack } });
   }
   const refresh = <Button tone="secondary" loading={query.isFetching} loadingLabel="Refreshing jobs…" onClick={() => { void query.refetch(); }}>Refresh jobs</Button>;
   const restart = <Button ref={reset} tone="secondary" onClick={() => { page('', []); }}>Return to first page</Button>;
+  function results() {
+  if (!valid) return <StatePanel state="error" title="Invalid job filters" description="Correct the filter fields or clear all filters to load results." action={<Button onClick={() => { setParams({}, { state: { jobCursors: [] } }); }}>Reset invalid filters</Button>} />;
   if (query.isPending) return <div className="jobs-loading" aria-busy="true">
     <p role="status">Loading jobs</p>{[0, 1, 2].map(id => <div key={id} className="job-skeleton" aria-hidden="true"><span /><span /><span /></div>)}
   </div>;
   if (!query.data || query.isError && !query.data.items.length) return <StatePanel state="error" title={query.error instanceof ApiError && query.error.status === 422 ? 'This results page has expired' : 'Jobs could not be loaded'}
     description="Your saved searches are safe. Retry, or return to the first page to load current discoveries."
     action={<><Button loading={query.isFetching} onClick={() => { void query.refetch(); }}>Retry loading jobs</Button>{cursor && restart}</>} />;
-  if (!query.data.items.length) return <StatePanel state="empty" title={cursor ? 'No jobs on this page' : 'No discoveries yet'}
-    description={cursor ? 'Results may have changed since this page was loaded. Return to your current discoveries.' : 'Run a saved search to discover jobs. Their facts will appear here as processing finishes.'}
-    action={<>{cursor ? restart : <Link to="/searches">Open saved searches</Link>}{refresh}</>} />;
+  if (!query.data.items.length) return <StatePanel state="empty" title={cursor ? 'No jobs on this page' : filtered ? 'No jobs match these filters' : 'No discoveries yet'}
+    description={cursor ? 'Results may have changed since this page was loaded. Return to your current discoveries.' : filtered ? 'Change or clear filters to see more discoveries.' : 'Run a saved search to discover jobs. Their facts will appear here as processing finishes.'}
+    action={<>{cursor ? restart : filtered ? <Button onClick={() => { setParams({}, { state: { jobCursors: [] } }); }}>Show all discoveries</Button> : <Link to="/searches">Open saved searches</Link>}{refresh}</>} />;
   return <div className="jobs-page">
     <div className="jobs-toolbar"><div><h2 ref={heading} tabIndex={-1}>Discovered jobs</h2>
-      <p>{query.data.items.length} {query.data.items.length === 1 ? 'job' : 'jobs'} on this page · Newest discoveries first</p></div>
+      <p>{query.data.items.length} {query.data.items.length === 1 ? 'job' : 'jobs'} on this page · {sortLabels[(filters.sort || 'newest') as keyof typeof sortLabels]}</p></div>
       {refresh}</div>
     {query.isError && <p role="alert">Refresh failed. Showing the last loaded results; refresh to try again.</p>}
     <ul className="job-list" aria-label="Discovered jobs">
@@ -121,4 +129,6 @@ export function Jobs({ ownerId }: { ownerId: string }) {
       <Button tone="secondary" disabled={!query.data.next_cursor || query.isFetching} onClick={() => { if (query.data.next_cursor) page(query.data.next_cursor, [...prior, cursor]); }}>Next page</Button>
     </nav>
   </div>;
+  }
+  return <><JobFilters ownerId={ownerId} />{errors.url && <p role="alert">{errors.url}</p>}{results()}</>;
 }

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -7,6 +7,7 @@ import type { components } from '../../../generated/api';
 import App from '../../App';
 import { api, sessionKey, type Session } from '../../shared/api';
 import { server } from '../../test/setup';
+import { filterErrors, filterParams, readFilters } from './jobFilters';
 
 type Job = components['schemas']['JobSummary'];
 const owner: Session = { id: '00000000-0000-4000-8000-000000000001', email: 'reader@example.org', email_verified: true, csrf_token: 'c'.repeat(64) };
@@ -34,13 +35,13 @@ beforeEach(() => {
     http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })),
     http.get(path, () => HttpResponse.json({ items, next_cursor: null })));
 });
-afterEach(() => { api.clearSession(); api.queryClient.clear(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); api.clearSession(); api.queryClient.clear(); });
 
 test('renders factual summaries with units, assessment coverage, safe links and timestamps', async () => {
   mount(); const link = await screen.findByRole('link', { name: 'Senior software engineer' });
   expect(link).toHaveAttribute('href', `/jobs/${items[0]?.id ?? ''}`);
   expect(screen.getByText('Example company')).toBeVisible();
-  expect(screen.getByText('Paris')).toBeVisible(); expect(screen.getByText('Hybrid')).toBeVisible();
+  expect(screen.getByText('Paris')).toBeVisible(); expect(within(screen.getByRole('article')).getByText('Hybrid')).toBeVisible();
   expect(screen.getByText('EUR 50000–70000 / year · gross')).toBeVisible();
   expect(screen.getByText('Match · 80%')).toBeVisible();
   expect(screen.getByText('75% of requirement weight assessed')).toBeVisible();
@@ -150,7 +151,7 @@ test('supports keyboard detail links with list context and restores cached posit
   expect(api.queryClient.getQueryData(['jobs-position', owner.id, '?cursor=saved'])).toBe(480);
   act(() => { window.history.back(); });
   await screen.findByRole('link', { name: 'Senior software engineer' });
-  expect(scroll).toHaveBeenCalledWith({ top: 480, behavior: 'instant' });
+  await waitFor(() => { expect(scroll).toHaveBeenCalledWith({ top: 480, behavior: 'instant' }); });
   await user.click(button('Previous page')); expect(window.location.search).toBe('');
 });
 
@@ -192,6 +193,7 @@ test('clears cached results and positions across owners and cancels a departed o
   expect(aborted).toBe(true); expect(api.queryClient.getQueriesData({ queryKey: ['jobs-position'] })).toEqual([]);
   items = []; deferred.release(); expect(await screen.findByText('No discoveries yet')).toBeVisible();
   expect(api.queryClient.getQueriesData({ queryKey: ['jobs', owner.id] })).toEqual([]);
+  expect(api.queryClient.getQueriesData({ queryKey: ['job-filter-runs', owner.id] })).toEqual([]);
 });
 
 
@@ -201,4 +203,159 @@ test('refreshes an empty list, reports a failed refresh and recovers to new disc
   expect(await screen.findByText('Jobs could not be loaded')).toBeVisible();
   items = [job()]; server.use(http.get(path, () => HttpResponse.json({ items, next_cursor: null })));
   await user.click(button('Retry loading jobs')); expect(await screen.findByText('Senior software engineer')).toBeVisible();
+});
+
+const runPath = 'http://localhost/api/v1/searches/runs';
+function run(name = 'Engineering'): components['schemas']['SearchRun'] {
+  return { id: crypto.randomUUID(), search_id: crypto.randomUUID(), search_revision: 1, idempotency_key: crypto.randomUUID(), status: 'completed',
+    snapshot: { name, definition: { groups: [['Python']] }, query: '("Python")', provider_parameters: {} }, counters: {}, created_at: now, updated_at: now };
+}
+const field = (name: string) => screen.getByLabelText(name);
+const advance = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+
+test.each([
+  'sort=salary', 'remote=anywhere', 'match_status=excellent', 'run_id=other-owner', 'keyword=%20', 'region=%00',
+  'keyword=' + 'a'.repeat(81), 'limit=50', 'remote=remote&remote=hybrid', 'cursor=' + 'a'.repeat(2049),
+  'include_unknown_region=1', 'include_unknown_remote=no', 'include_unknown_salary=maybe',
+  'salary_min=-1&currency=EUR&period=year', 'salary_min=NaN&currency=EUR&period=year',
+  'salary_min=1000000000001&currency=EUR&period=year', 'salary_min=1.00001&currency=EUR&period=year',
+  'salary_min=10', 'currency=eur&period=year', 'currency=EUR&period=decade', 'salary_min=2&salary_max=1&currency=EUR&period=hour',
+  'salary_min=999999999999.9999&salary_max=999999999999.9998&currency=EUR&period=year',
+])('rejects invalid URL filter values: %s', query => { expect(Object.keys(filterErrors(new URLSearchParams(query))).length).toBeGreaterThan(0); });
+
+test('round trips all supported filters without changing literal text or salary precision', () => {
+  const values = new URLSearchParams({ keyword: 'C++ 100% & Go', region: 'Île-de-France', run_id: owner.id, remote: 'hybrid', match_status: 'unknown', sort: 'match',
+    salary_min: '0', salary_max: '999999999999.9999', currency: 'EUR', period: 'year', include_unknown_region: 'true', include_unknown_remote: 'true', include_unknown_salary: 'true' });
+  expect(filterErrors(values)).toEqual({}); expect(Object.fromEntries(filterParams(readFilters(values)))).toEqual(Object.fromEntries(values));
+  expect(filterParams(readFilters(new URLSearchParams('sort=newest&include_unknown_salary=false'))).toString()).toBe('');
+});
+
+test('blocks invalid links before fetching jobs, associates field errors and clears to recover', async () => {
+  let reads = 0; server.use(http.get(path, () => { reads++; return HttpResponse.json({ items, next_cursor: null }); }));
+  const user = userEvent.setup(); mount('/jobs?salary_min=10&salary_max=2&extra=secret');
+  expect(await screen.findByText('Invalid job filters')).toBeVisible(); expect(field('Currency')).toHaveAttribute('aria-invalid', 'true');
+  expect(field('Currency')).toHaveAccessibleDescription(/three-letter currency/); expect(field('Salary period')).toHaveAccessibleDescription(/Choose the salary period/);
+  await user.click(button('Apply filters')); expect(field('Maximum salary')).toHaveFocus(); expect(reads).toBe(0);
+  await user.click(button('Reset invalid filters')); await screen.findByText('Senior software engineer'); expect(reads).toBe(1); expect(window.location.search).toBe('');
+});
+
+test('uses deep-linked combinations on the server and preserves filters through pagination and browser back', async () => {
+  const selected = run(), seen: URLSearchParams[] = [];
+  server.use(http.get(runPath, () => HttpResponse.json({ items: [selected], next_offset: null })), http.get(path, ({ request }) => {
+    const query = new URL(request.url).searchParams; seen.push(query); return HttpResponse.json({ items, next_cursor: query.has('cursor') ? null : 'next' });
+  }));
+  const user = userEvent.setup(); mount(`/jobs?keyword=C%2B%2B&region=France&remote=remote&match_status=stale&sort=title&run_id=${selected.id}`);
+  await screen.findByText('Senior software engineer'); expect(field('Keyword')).toHaveValue('C++'); expect(field('Search run')).toHaveValue(selected.id);
+  expect(seen[0]?.get('remote')).toBe('remote'); expect(seen[0]?.get('match_status')).toBe('stale'); expect(seen[0]?.get('limit')).toBe('20');
+  await user.click(button('Next page')); await waitFor(() => { expect(seen).toHaveLength(2); });
+  expect(seen[1]?.get('cursor')).toBe('next'); expect(seen[1]?.get('keyword')).toBe('C++');
+  await user.selectOptions(field('Sort jobs'), 'oldest'); await waitFor(() => { expect(seen).toHaveLength(3); });
+  expect(seen[2]?.has('cursor')).toBe(false); expect(window.history.state).toMatchObject({ usr: { jobCursors: [] } });
+  expect(field('Sort jobs')).toHaveFocus(); expect(screen.getByText(/Oldest discoveries first/, { selector: '.jobs-toolbar p' })).toBeVisible();
+  act(() => { window.history.back(); }); await waitFor(() => { expect(field('Sort jobs')).toHaveValue('title'); });
+  expect(new URLSearchParams(window.location.search).get('cursor')).toBe('next'); expect(button('Next page')).toBeDisabled();
+});
+
+test('debounces text, resets pagination, aborts stale requests and never replaces newer results', async () => {
+  const deferred = gate(), seen: string[] = []; let aborted = false;
+  server.use(http.get(path, async ({ request }) => {
+    const query = new URL(request.url).searchParams, keyword = query.get('keyword') ?? ''; seen.push(keyword);
+    if (keyword === 'Python') { request.signal.addEventListener('abort', () => { aborted = true; }); await deferred.pending; }
+    return HttpResponse.json({ items: [job({ title: { status: 'known', values: [keyword || 'Original result'] } })], next_cursor: null });
+  }));
+  mount('/jobs?cursor=old'); await screen.findByText('Original result'); vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  field('Keyword').focus(); fireEvent.change(field('Keyword'), { target: { value: 'Py' } }); await advance(200);
+  fireEvent.change(field('Keyword'), { target: { value: 'Python' } }); await advance(299); expect(seen).toEqual(['']);
+  await advance(1); vi.useRealTimers(); await waitFor(() => { expect(seen).toEqual(['', 'Python']); });
+  expect(new URLSearchParams(window.location.search).has('cursor')).toBe(false); expect(field('Keyword')).toHaveFocus();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); fireEvent.change(field('Keyword'), { target: { value: 'Go' } }); await advance(300); await advance(50); vi.useRealTimers();
+  await waitFor(() => { expect({ seen, url: window.location.search, value: (field('Keyword') as HTMLInputElement).value }).toMatchObject({ seen: ['', 'Python', 'Go'] }); });
+  expect(await screen.findByRole('link', { name: 'Go' })).toBeVisible(); expect(aborted).toBe(true);
+  deferred.release(); await act(async () => { await deferred.pending; }); expect(screen.queryByRole('link', { name: 'Python' })).not.toBeInTheDocument();
+});
+
+test('requires salary units, preserves zero and precision, and sends unknown toggles without conversion', async () => {
+  const seen: URLSearchParams[] = []; server.use(http.get(path, ({ request }) => { seen.push(new URL(request.url).searchParams); return HttpResponse.json({ items, next_cursor: null }); }));
+  const user = userEvent.setup(); mount(); await screen.findByText('Senior software engineer');
+  fireEvent.change(field('Minimum salary'), { target: { value: '0' } }); expect(field('Currency')).toHaveAttribute('aria-invalid', 'true');
+  fireEvent.change(field('Currency'), { target: { value: 'eur' } }); expect(field('Currency')).toHaveValue('EUR'); expect(seen).toHaveLength(1);
+  await user.selectOptions(field('Salary period'), 'hour'); await waitFor(() => { expect(seen).toHaveLength(2); });
+  fireEvent.change(field('Maximum salary'), { target: { value: '10.0001' } }); await user.click(button('Apply filters'));
+  await user.click(field('Include unknown salary data')); await user.click(field('Include unknown regions')); await user.click(field('Include unknown work arrangements'));
+  await waitFor(() => { expect(seen.at(-1)?.get('include_unknown_remote')).toBe('true'); });
+  expect(Object.fromEntries(seen.at(-1) ?? [])).toMatchObject({ salary_min: '0', salary_max: '10.0001', currency: 'EUR', period: 'hour', include_unknown_salary: 'true', include_unknown_region: 'true' });
+  await user.click(field('Include unknown salary data')); await waitFor(() => { expect(seen.at(-1)?.has('include_unknown_salary')).toBe(false); });
+  await user.click(button('Clear all')); await screen.findByText('Senior software engineer'); expect(field('Minimum salary')).toHaveValue(''); expect(window.location.search).toBe('');
+});
+
+test('distinguishes filtered empty results and clears filters without losing discovery access', async () => {
+  server.use(http.get(path, ({ request }) => HttpResponse.json({ items: new URL(request.url).searchParams.has('keyword') ? [] : items, next_cursor: null })));
+  const user = userEvent.setup(); mount('/jobs?keyword=unavailable'); expect(await screen.findByText('No jobs match these filters')).toBeVisible();
+  await user.click(button('Show all discoveries')); expect(await screen.findByText('Senior software engineer')).toBeVisible(); expect(field('Keyword')).toHaveValue('');
+});
+
+test('loads older owned runs and retrieves a deep-linked run beyond the initial page', async () => {
+  const recent = run(), older = run('Older engineering'), cancelled = { ...run('Cancelled'), status: 'cancelled' }, offsets: string[] = [];
+  server.use(http.get(runPath, ({ request }) => { const offset = new URL(request.url).searchParams.get('offset') ?? ''; offsets.push(offset);
+    return HttpResponse.json({ items: offset === '0' ? [recent, cancelled] : [recent, older], next_offset: offset === '0' ? 20 : null }); }),
+    http.get(`${runPath}/${older.id}`, () => HttpResponse.json(older)));
+  const user = userEvent.setup(); mount(`/jobs?run_id=${older.id.toUpperCase()}`); expect(await screen.findByRole('option', { name: /Older engineering/ })).toBeInTheDocument();
+  expect(field('Search run')).toHaveValue(older.id); expect(screen.queryByRole('option', { name: /Cancelled/ })).not.toBeInTheDocument();
+  await user.click(button('Load older search runs')); await waitFor(() => { expect(offsets).toEqual(['0', '20']); });
+  expect(screen.getAllByRole('option', { name: /Older engineering/ })).toHaveLength(1);
+  expect(screen.getAllByRole('option', { name: /^Engineering ·/ })).toHaveLength(1);
+  await user.selectOptions(field('Search run'), recent.id); expect(new URLSearchParams(window.location.search).get('run_id')).toBe(recent.id);
+});
+
+test('recovers run-loading errors without exposing server payloads and marks missing selected runs', async () => {
+  const selected = run(); server.use(http.get(runPath, () => failure(503)), http.get(`${runPath}/${selected.id}`, () => failure(404)));
+  const user = userEvent.setup(); mount(`/jobs?run_id=${selected.id}`); expect(await screen.findByText(/Search runs could not be loaded/)).toBeVisible();
+  expect(screen.queryByText('Private server payload')).not.toBeInTheDocument();
+  server.use(http.get(runPath, () => HttpResponse.json({ items: [], next_offset: null })), http.get(`${runPath}/${selected.id}`, () => HttpResponse.json({ ...selected, status: 'cancelled' })));
+  await user.click(button('Retry search runs')); await waitFor(() => { expect(screen.queryByText(/Search runs could not be loaded/)).not.toBeInTheDocument(); });
+  expect(screen.getByRole('option', { name: 'Selected run unavailable' })).toBeInTheDocument(); await user.selectOptions(field('Search run'), ''); expect(window.location.search).toBe('');
+});
+
+test.each([401, 403])('expires the session and clears private run choices on run API %i', async status => {
+  server.use(http.get(runPath, () => { current = null; return failure(status); })); mount();
+  expect(await screen.findByText(/Your session has expired/)).toBeVisible(); expect(api.queryClient.getQueriesData({ queryKey: ['job-filter-runs'] })).toEqual([]);
+});
+
+test('keeps mobile drawer focus contained, supports immediate apply, Escape and trigger restoration', async () => {
+  const listener = vi.fn(), remove = vi.fn();
+  vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: listener, removeEventListener: remove }));
+  Object.defineProperties(HTMLDialogElement.prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } }, close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
+  });
+  try {
+    const user = userEvent.setup(), view = mount(); await screen.findByText('Senior software engineer'); expect(screen.queryByLabelText('Keyword')).not.toBeInTheDocument();
+    button('Filters and sorting').focus(); await user.keyboard('{Enter}'); const dialog = screen.getByRole('dialog', { name: 'Filter and sort jobs' });
+    expect(field('Keyword')).toHaveFocus(); await user.tab({ shift: true }); expect(button('Close filters')).toHaveFocus(); await user.tab(); expect(field('Keyword')).toHaveFocus();
+    fireEvent.change(field('Keyword'), { target: { value: 'Go' } }); await user.click(button('Show results'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(button('Filters and sorting')).toHaveFocus(); expect(new URLSearchParams(window.location.search).get('keyword')).toBe('Go');
+    await user.click(button('Filters and sorting')); fireEvent.change(field('Keyword'), { target: { value: 'Unsent' } });
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true })); expect(button('Filters and sorting')).toHaveFocus();
+    await user.click(button('Filters and sorting')); expect(field('Keyword')).toHaveValue('Go'); await user.click(button('Clear all'));
+    expect(field('Keyword')).toHaveValue(''); await user.click(button('Close filters')); expect(dialog).not.toBeInTheDocument(); view.unmount(); expect(remove).toHaveBeenCalled();
+  } finally { Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal'); Reflect.deleteProperty(HTMLDialogElement.prototype, 'close'); }
+});
+
+
+test('browser back discards an unsent text edit instead of overwriting the restored URL', async () => {
+  const seen: string[] = []; server.use(http.get(path, ({ request }) => { seen.push(new URL(request.url).searchParams.get('keyword') ?? ''); return HttpResponse.json({ items, next_cursor: null }); }));
+  const user = userEvent.setup(); mount('/jobs?keyword=Python'); await screen.findByText('Senior software engineer');
+  await user.selectOptions(field('Sort jobs'), 'oldest'); await waitFor(() => { expect(seen).toHaveLength(2); });
+  fireEvent.change(field('Keyword'), { target: { value: 'Unsent' } }); act(() => { window.history.back(); });
+  await waitFor(() => { expect(field('Keyword')).toHaveValue('Python'); });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); await advance(500); vi.useRealTimers();
+  expect(window.location.search).toBe('?keyword=Python'); expect(seen).toEqual(['Python', 'Python']);
+});
+
+
+test('keeps the literal word false in text filters and rejects it as a salary amount', async () => {
+  const seen: URLSearchParams[] = []; server.use(http.get(path, ({ request }) => { seen.push(new URL(request.url).searchParams); return HttpResponse.json({ items, next_cursor: null }); }));
+  const user = userEvent.setup(); mount('/jobs?keyword=false&region=false&include_unknown_region=false'); await screen.findByText('Senior software engineer');
+  expect(seen[0]?.get('keyword')).toBe('false'); expect(seen[0]?.get('region')).toBe('false'); expect(seen[0]?.has('include_unknown_region')).toBe(false);
+  fireEvent.change(field('Minimum salary'), { target: { value: 'false' } }); await user.click(button('Apply filters'));
+  expect(field('Minimum salary')).toHaveAttribute('aria-invalid', 'true'); expect(field('Minimum salary')).toHaveFocus(); expect(seen).toHaveLength(1);
 });
