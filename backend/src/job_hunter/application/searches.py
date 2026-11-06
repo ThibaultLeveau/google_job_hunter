@@ -44,6 +44,17 @@ class RunCounters(SearchValue):
     skipped_results: int = Field(default=0, ge=0)
     processing_total: int = Field(default=0, ge=0)
     processing_ready: int = Field(default=0, ge=0)
+    processing_failed: int = Field(default=0, ge=0)
+
+
+class DiscoveryProgress(SearchValue):
+    pages_completed: int = Field(default=0, ge=0, le=10)
+    max_pages: int | None = Field(default=None, ge=1, le=10)
+    max_results: int | None = Field(default=None, ge=1, le=100)
+    provider_requests: int = Field(default=0, ge=0)
+    last_request_id: str | None = Field(default=None, max_length=128)
+    error_code: str | None = Field(default=None, max_length=32)
+    limited: bool = False
 
 
 RunStatus = Literal["pending", "running", "completed", "partial", "failed", "cancelled"]
@@ -57,6 +68,7 @@ class SearchRun(SearchValue):
     snapshot: RunSnapshot
     status: RunStatus
     counters: RunCounters
+    discovery: DiscoveryProgress = Field(default_factory=DiscoveryProgress)
     created_at: datetime
     updated_at: datetime
 
