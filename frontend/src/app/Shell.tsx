@@ -10,6 +10,7 @@ import { Verification, VerificationRequired } from '../features/auth/Verificatio
 import { Profile } from '../features/profile/Profile';
 import { Searches } from '../features/searches/Searches';
 import { Jobs } from '../features/jobs/Jobs';
+import { JobDetail } from '../features/jobs/JobDetail';
 import { authRoutes, safeReturnPath, sessionNotice, workspaceRoutes } from './routes';
 
 function FatalPage() {
@@ -94,7 +95,7 @@ export function Shell() {
   // Query notifications can precede router transitions; release the guard only on arrival.
   const signingOut = useRef(false);
   const user = session.isSuccess ? session.data : null;
-  const title = location.pathname === '/' ? 'Your workspace'
+  const title = matchPath('/jobs/:jobId', location.pathname) ? 'Job details' : location.pathname === '/' ? 'Your workspace'
     : [...workspaceRoutes, ...authRoutes].find(route => matchPath(route.path, location.pathname))?.title ?? 'Page not found';
   useEffect(() => {
     document.title = `${title} · Job Hunter`;
@@ -124,6 +125,7 @@ export function Shell() {
         <Routes>
           <Route path="/" element={<Navigate to="/profile" replace />} />
           <Route element={<RequireSession session={session} signingOut={signingOut} />}>
+            <Route path="/jobs/:jobId" element={<JobDetail key={user?.id} ownerId={user?.id ?? ''} />} />
             {workspaceRoutes.map(route => <Route key={route.path} path={route.path} element={
               route.path === '/profile' ? <Profile key={user?.id} ownerId={user?.id ?? ''} /> :
               route.path === '/searches' ? <Searches key={user?.id} ownerId={user?.id ?? ''} /> :

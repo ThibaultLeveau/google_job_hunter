@@ -1242,9 +1242,9 @@ scroll positions support browser return; account changes discard private results
 positions and pending requests. Loading skeletons, empty pages, expired cursors,
 refresh failures and retries have explicit states. Empty lists can be refreshed.
 
-Title links establish `/jobs/{job_id}` with list `returnTo` context. The dedicated
-detail route/content belongs to #59; until then those links reach the existing
-not-found view. The original posting link opens the public source in a new tab.
+Title links open `/jobs/{job_id}` with the filtered list URL and cursor history.
+The detail page's back link restores that context and the saved list position.
+The original posting link opens the public source in a new tab.
 The filter area supports keyword, owned search run (including older runs), exact
 region, work arrangement, match status and salary comparisons. Sort by newest,
 oldest, title or match. Filters use validated URL parameters; changes reset the
@@ -1280,6 +1280,34 @@ Escape and trigger restoration. Reviewed [desktop filters](docs/validation/issue
 [mobile drawer](docs/validation/issue-58-mobile.jpg) captures record the layout.
 
 ### Job details and retry actions
+
+The dedicated detail route shows factual title/company, location and region, work
+arrangement, salary units, employment type, seniority, skills, geographic eligibility
+and requested languages. Missing facts remain unknown. Source language and fetch time
+stay visible, alongside notices for incomplete, failed, stale, removed or unsupported
+content. Terminal unavailable content is not presented as pending processing.
+
+A concise application checklist comes from the preserved requirement summary. Its
+full disclosure groups required, preferred and unclear items, distinguishes job
+requirements, materials, instructions and deadlines, and provides source excerpts.
+Explicit deadline timestamps are retained; ambiguous dates are not inferred. Separate
+disclosures expose factual evidence, prepared text and original source paragraphs.
+All external/source/model text renders literally, with safe original-posting links.
+
+Deep links require an authenticated, verified session and an owned discovery. Invalid
+or inaccessible IDs show a safe unavailable state; loading, failed refresh and retry
+states retain a useful route back. Queries are cancelled and private caches cleared
+on account changes. The profile-match section reports availability only; personalized
+explanations and processing retry controls remain separate interface issues.
+
+Issue #59 browser validation used Chromium with the real API, worker and isolated
+PostgreSQL database, with deterministic external adapters. Job facts, checklist and
+evidence disclosures, removed/unknown content, stale match availability, filtered-list
+return/scroll restoration and second-account denial passed. Keyboard checks covered
+Enter/Space disclosure activation. At 320/768/1440px and 100%/200% text size, covered
+states had no horizontal overflow or axe violations. Reviewed
+[desktop details](docs/validation/issue-59-desktop.jpg) and
+[mobile details](docs/validation/issue-59-mobile.jpg) show the factual reading layout.
 
 `GET /api/v1/jobs/{job_id}` returns preserved source paragraphs, clean text,
 metadata citations, requirements and the signed-in owner's match. Artifact IDs,

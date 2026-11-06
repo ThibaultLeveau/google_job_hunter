@@ -33,6 +33,7 @@ beforeEach(() => {
   scroll.mockClear(); vi.spyOn(window, 'scrollTo').mockImplementation(scroll);
   server.use(http.get('http://localhost/api/auth/me', () => current ? HttpResponse.json(current) : failure(401)),
     http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })),
+    http.get(path + '/:jobId', () => failure(404)),
     http.get(path, () => HttpResponse.json({ items, next_cursor: null })));
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); api.clearSession(); api.queryClient.clear(); });
