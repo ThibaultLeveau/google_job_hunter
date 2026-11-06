@@ -16,16 +16,21 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     select,
+    update,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from job_hunter.application.documents import Documents, PrivateStorage
-from job_hunter.domain.documents import Document
+from job_hunter.application.worker import RetryableTaskError
+from job_hunter.domain.documents import PARSER_VERSION, Document, ParseResult
 from job_hunter.domain.errors import DomainError
-from job_hunter.domain.tasks import NewTask, TaskKey
+from job_hunter.domain.tasks import NewTask, Task, TaskError, TaskKey
 from job_hunter.infrastructure.accounts import UserRecord
 from job_hunter.infrastructure.database import Base, Database
-from job_hunter.infrastructure.tasks import PostgresTaskQueue
+from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord
+from job_hunter.infrastructure.worker import Handler
 from job_hunter.settings import ConfigurationError, load_settings
 
 
@@ -58,7 +63,7 @@ class DocumentRecord(Base):
         CheckConstraint("content_hash ~ '^[a-f0-9]{64}$'", name="ck_document_hash"),
         CheckConstraint("storage_key ~ '^[a-f0-9]{32}$'", name="ck_document_key"),
         CheckConstraint(
-            "status IN ('queued','processing','ready','failed')",
+            "status IN ('queued','processing','ready','failed','unsupported')",
             name="ck_document_status",
         ),
     )
@@ -71,8 +76,155 @@ class DocumentRecord(Base):
     size_bytes: Mapped[int]
     version: Mapped[int]
     status: Mapped[str] = mapped_column(String(16))
+    parse_error: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ParsedDocumentRecord(Base):
+    __tablename__ = "parsed_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "document_version",
+            "parser_version",
+            name="uq_parsed_version",
+        ),
+        CheckConstraint(
+            "document_version > 0 AND parser_version > 0", name="ck_parsed_versions"
+        ),
+        CheckConstraint(
+            "source_hash ~ '^[a-f0-9]{64}$' AND content_hash ~ '^[a-f0-9]{64}$'",
+            name="ck_parsed_hashes",
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    document_id: Mapped[UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE")
+    )
+    document_version: Mapped[int]
+    parser_version: Mapped[int]
+    source_hash: Mapped[str] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict[str, object]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DocumentParsing:
+    def __init__(
+        self,
+        database: Database,
+        storage: PrivateStorage,
+        parser: Callable[[BinaryIO, str], ParseResult],
+        now: Callable[[], datetime],
+    ) -> None:
+        self.database, self.storage, self.parser, self.now = (
+            database,
+            storage,
+            parser,
+            now,
+        )
+
+    def live(self, session: Session, task: Task) -> DocumentRecord | None:
+        return session.scalar(
+            select(DocumentRecord)
+            .join(UserRecord)
+            .where(
+                DocumentRecord.id == task.key.subject_id,
+                DocumentRecord.id == task.payload_ref,
+                DocumentRecord.version == task.key.subject_version,
+                DocumentRecord.deleted_at.is_(None),
+                UserRecord.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+
+    def artifact(self, session: Session, task: Task) -> ParsedDocumentRecord | None:
+        return session.scalar(
+            select(ParsedDocumentRecord).where(
+                ParsedDocumentRecord.document_id == task.key.subject_id,
+                ParsedDocumentRecord.document_version == task.key.subject_version,
+                ParsedDocumentRecord.parser_version == PARSER_VERSION,
+            )
+        )
+
+    def execute(self, task: Task) -> ParseResult | None:
+        with self.database.transaction() as session:
+            current = session.scalar(
+                select(TaskRecord)
+                .where(
+                    TaskRecord.id == task.id,
+                    TaskRecord.status == "running",
+                    TaskRecord.generation == task.generation,
+                    TaskRecord.lease_token == task.lease_token,
+                    TaskRecord.lease_expires_at > self.now(),
+                )
+                .with_for_update()
+            )
+            if current is None or (row := self.live(session, task)) is None:
+                return None
+            artifact = self.artifact(session, task)
+            if artifact is not None:
+                return ParseResult.model_validate(artifact.data)
+            row.status, row.parse_error = "processing", None
+            key, media_type = row.storage_key, row.media_type
+        try:
+            with self.storage.open(key) as file:
+                return self.parser(file, media_type)
+        except OSError:
+            return ParseResult(error="storage_unavailable")
+
+    def publish(
+        self, session: Session, task: Task, result: object, now: datetime
+    ) -> None:
+        if (
+            not isinstance(result, ParseResult)
+            or (row := self.live(session, task)) is None
+        ):
+            return
+        if result.error is None and result.source_hash != row.content_hash:
+            result = ParseResult(error="invalid_document")
+        row.parse_error = result.error
+        if result.error is not None:
+            # Preserve the queue's failed-task retry contract for known parse errors.
+            session.execute(
+                update(TaskRecord)
+                .where(TaskRecord.id == task.id)
+                .values(
+                    status="failed",
+                    error_code=TaskError.PERMANENT.value,
+                )
+            )
+            row.status = (
+                "unsupported"
+                if result.error
+                in {"ocr_required", "encrypted_document", "unsupported_format"}
+                else "failed"
+            )
+        else:
+            row.status = "ready"
+            if self.artifact(session, task) is None:
+                session.add(
+                    ParsedDocumentRecord(
+                        id=uuid4(),
+                        document_id=row.id,
+                        document_version=row.version,
+                        parser_version=PARSER_VERSION,
+                        source_hash=row.content_hash,
+                        content_hash=result.content_hash,
+                        data=result.model_dump(mode="json"),
+                        created_at=now,
+                    )
+                )
+
+    def handlers(self) -> dict[str, Handler]:
+        def execute(task: Task) -> object:
+            try:
+                return self.execute(task)
+            except SQLAlchemyError:
+                raise RetryableTaskError() from None
+
+        return {"document_parse": Handler(execute, self.publish)}
 
 
 def snapshot(row: DocumentRecord) -> Document:

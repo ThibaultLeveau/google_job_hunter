@@ -1,11 +1,76 @@
 import codecs
 import re
 from datetime import datetime
-from typing import BinaryIO, Literal
+from hashlib import sha256
+from typing import BinaryIO, Literal, Self
 from uuid import UUID
 from zipfile import BadZipFile, ZipFile
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+ParseError = Literal[
+    "invalid_document",
+    "encrypted_document",
+    "ocr_required",
+    "empty_document",
+    "limits_exceeded",
+    "timed_out",
+    "cancelled",
+    "storage_unavailable",
+    "unsupported_format",
+]
+PARSER_VERSION = 1
+
+
+class TextSegment(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+    locator: str = Field(pattern=r"^(page|paragraph):[1-9][0-9]*$", max_length=32)
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    text: str = Field(max_length=1000000, pattern=r"^[^\x00]*$")
+
+
+class ParseResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+    segments: tuple[TextSegment, ...] = Field(default=(), max_length=10000)
+    language: str | None = Field(default=None, max_length=80, pattern=r"^[^\x00]*$")
+    engine: str | None = Field(default=None, max_length=80)
+    source_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    error: ParseError | None = None
+
+    @property
+    def text(self) -> str:
+        return "\n".join(segment.text for segment in self.segments)
+
+    @property
+    def content_hash(self) -> str:
+        return sha256(self.text.encode()).hexdigest()
+
+    @model_validator(mode="after")
+    def coherent(self) -> Self:
+        if self.error is not None:
+            if self.segments:
+                raise ValueError("Failed parsing cannot publish partial text.")
+            return self
+        if (
+            not self.source_hash
+            or not self.engine
+            or not self.text.strip()
+            or len(self.text) > 1000000
+        ):
+            raise ValueError("Invalid parsed document.")
+        offset, locations = 0, set()
+        for segment in self.segments:
+            if (
+                segment.start != offset
+                or segment.end != offset + len(segment.text)
+                or segment.locator in locations
+            ):
+                raise ValueError("Invalid source locations.")
+            offset = segment.end + 1
+            locations.add(segment.locator)
+        return self
+
 
 TYPES = {
     "application/pdf": ".pdf",
@@ -29,7 +94,8 @@ class Document(BaseModel):
     media_type: str
     size_bytes: int
     version: int
-    status: Literal["queued", "processing", "ready", "failed"]
+    status: Literal["queued", "processing", "ready", "failed", "unsupported"]
+    parse_error: ParseError | None = None
     created_at: datetime
     deleted_at: datetime | None
 
