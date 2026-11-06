@@ -12,6 +12,7 @@ from job_hunter.infrastructure import (
     jobs,  # noqa: F401 -- register job registry tables
     preparation,  # noqa: F401 -- register public text preparation tables
     profiles,  # noqa: F401 -- register profile tables
+    requirements,  # noqa: F401 -- register full application requirements
     searches,  # noqa: F401 -- register search tables
     snapshots,  # noqa: F401 -- register public snapshot tables
 )
