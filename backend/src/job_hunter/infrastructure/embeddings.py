@@ -145,7 +145,7 @@ class PostgresEmbeddings:
                 .on_conflict_do_nothing()
             )
             for chunk in chunks:
-                row = session.get(ChunkRecord, chunk.id)
+                row = session.get(ChunkRecord, chunk.id, with_for_update={"read": True})
                 if row is None or Chunk.model_validate(row.payload) != chunk:
                     raise DomainError("conflict")
             for record in records:
