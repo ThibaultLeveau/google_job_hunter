@@ -27,6 +27,7 @@ from job_hunter.infrastructure.documents import (
 )
 from job_hunter.infrastructure.fetching import HttpFetcher, load_fetch_settings
 from job_hunter.infrastructure.parsing import IsolatedParser
+from job_hunter.infrastructure.pipeline import create_pipeline
 from job_hunter.infrastructure.recovery import PostgresRecovery
 from job_hunter.infrastructure.search_provider import (
     create_search_provider,
@@ -87,9 +88,9 @@ def main() -> None:
         )
         while not stop.is_set() and extraction.backfill():
             pass
-        handlers = {
-            **HANDLERS,
-            **PostgresCrawler(
+        pipeline = create_pipeline(
+            database,
+            PostgresCrawler(
                 database,
                 PoliteFetcher(
                     CrawlPolicyStore(database),
@@ -97,7 +98,15 @@ def main() -> None:
                     clock,
                 ),
                 clock,
-            ).handlers(),
+            ),
+            ai_config,
+        )
+        cursor = pipeline.backfill(None, clock.now())
+        while cursor is not None and not stop.is_set():
+            cursor = pipeline.backfill(cursor, clock.now())
+        handlers = {
+            **HANDLERS,
+            **pipeline.handlers(),
             **PostgresDiscovery(database, search_provider, clock.now).handlers(),
             **extraction.handlers(),
             **verification.handlers(SmtpMail(mail_settings), clock.now),

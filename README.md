@@ -1071,6 +1071,26 @@ writes. Omitting `transaction` preserves standalone publication. The caller must
 and subject before publishing and enqueue successors in that same transaction; that wiring remains
 #51. Real PostgreSQL commit/rollback and failure-accounting tests are in `tests/test_stage_publication.py`.
 
+### Versioned job processing
+
+Issue #51 wires the worker's explicit crawl → text → clean → chunks/embeddings and text → metadata →
+requirements handlers. A live lease fences artifact publication and successor enqueue in one transaction.
+Task identities include upstream revisions. Startup scans 100 sources per page; each completion schedules
+at most two successors and each embedding task makes one bounded call. Committed artifacts are reused.
+Pipeline failures retain accounting without caching failed artifacts; explicit queue retries resume missing work.
+Existing standalone failed artifacts keep their immutable revision semantics.
+
+`PostgresPipeline.status(session, snapshot_id)` reports independent content/analysis/embeddings readiness,
+safe stage states/errors, task timestamps and dependency revisions. Fetch status stays on the public source.
+Publication rechecks the current snapshot and a reference through a live user/search and non-cancelled run.
+Another live user preserves shared work; otherwise late results fail. Database errors use bounded retries.
+Provider I/O holds no transaction. Pre-publication crashes can repeat calls or lose accounting; budgets remain #54.
+
+With `TEST_DATABASE_URL` configured, run the real-queue fixture end to end:
+`uv run --directory backend --locked pytest --require-database tests/test_pipeline.py -q`.
+Fixture AI retains source text and returns ambiguous metadata, unknown requirements and deterministic vectors;
+production uses configured providers. This issue adds no job API, private matching or frontend timeline.
+
 ### Source-verified job metadata
 
 Issue #49 adds `ExtractMetadata` and `PostgresMetadata`, composed by `create_metadata`.
