@@ -275,7 +275,7 @@ class PostgresSearches:
             rows = session.scalars(
                 select(SearchRunRecord)
                 .where(SearchRunRecord.owner_id == owner)
-                .order_by(SearchRunRecord.created_at, SearchRunRecord.id)
+                .order_by(SearchRunRecord.created_at.desc(), SearchRunRecord.id.desc())
                 .limit(limit + 1)
                 .offset(offset)
             ).all()

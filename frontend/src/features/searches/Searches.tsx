@@ -4,6 +4,7 @@ import type { components } from '../../../generated/api';
 import { api, ApiError } from '../../shared/api';
 import { Button, StatePanel } from '../../shared/ui';
 import { SearchEditor, SearchLogic, type SavedSearch } from './SearchEditor';
+import { SearchRuns } from './SearchRuns';
 
 export function Searches({ ownerId }: { ownerId: string }) {
   const key = ['searches', ownerId] as const;
@@ -67,5 +68,6 @@ export function Searches({ ownerId }: { ownerId: string }) {
       await api.queryClient.invalidateQueries({ queryKey: key });
       if (mounted.current) { setEditor(null); setNotice(`Saved “${value.name}”.`); }
     }} />}
+    <SearchRuns ownerId={ownerId} searches={list.data?.items ?? []} disabled={blocked} reloadSearches={refresh} />
   </div>;
 }

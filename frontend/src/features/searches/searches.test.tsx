@@ -31,6 +31,8 @@ beforeEach(() => {
   server.use(http.get('http://localhost/api/auth/me', () => current ? HttpResponse.json(current) : failure(401)),
     http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })),
     http.get(path, () => HttpResponse.json({ items, next_offset: null })),
+    http.get(path + '/provider', () => HttpResponse.json({ provider: 'disabled', status: 'disabled', max_pages: 5, max_results: 50 })),
+    http.get(path + '/runs', () => HttpResponse.json({ items: [], next_offset: null })),
     http.get(path + '/hints', () => HttpResponse.json({ allowed_domains: ['linkedin.com', 'a.org', 'b.org', 'c.org', 'd.org'], language_codes: ['en', 'fr'], country_codes: ['fr', 'gb', 'us'] })),
     http.post(path + '/preview', () => HttpResponse.json({ query: 'Server-rendered query', provider_parameters: {}, hints: [] })),
     http.get(path + '/:id', ({ params }) => { const value = items.find(item => item.id === params.id); return value ? HttpResponse.json(value) : failure(404); }));

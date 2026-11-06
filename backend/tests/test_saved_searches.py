@@ -35,6 +35,22 @@ DATA = {
 }
 
 
+def test_run_history_is_newest_first_with_stable_ties(
+    isolated_database: Database, owners: tuple[UUID, UUID]
+) -> None:
+    service = PostgresSearches(isolated_database, lambda: NOW, ())
+    saved = service.save(owners[0], SearchWrite.model_validate(DATA))
+    first = service.start(owners[0], saved.id, 1, uuid4())
+    service.now = lambda: NOW + timedelta(seconds=1)
+    recent = [service.start(owners[0], saved.id, 1, uuid4()) for _ in range(2)]
+    expected = [run.id for run in sorted(recent, key=lambda run: run.id, reverse=True)]
+    expected.append(first.id)
+    assert [service.runs(owners[0], 1, n).items[0].id for n in range(3)] == expected
+    assert service.runs(owners[0], 1, 0).next_offset == 1
+    assert service.runs(owners[0], 1, 2).next_offset is None
+    assert service.runs(owners[1], 20, 0).items == ()
+
+
 def test_owned_crud_snapshots_replay_and_verification(
     isolated_database: Database,
     owners: tuple[UUID, UUID],

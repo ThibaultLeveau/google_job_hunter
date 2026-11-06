@@ -16,6 +16,8 @@ const denied = () => HttpResponse.json({ code: 'unauthenticated', message: 'Sign
 
 beforeEach(() => {
   server.use(http.get('http://localhost/api/v1/searches', () => HttpResponse.json({ items: [], next_offset: null })));
+  server.use(http.get('http://localhost/api/v1/searches/provider', () => HttpResponse.json({ provider: 'disabled', status: 'disabled', max_pages: 5, max_results: 50 })),
+    http.get('http://localhost/api/v1/searches/runs', () => HttpResponse.json({ items: [], next_offset: null })));
   server.use(http.get('http://localhost/api/v1/profile', () => HttpResponse.json({ id: owner.id, revision: 0, facts: [] })));
   server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })));
   api.queryClient.setQueryDefaults(['auth-providers'], { retry: false });

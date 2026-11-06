@@ -804,7 +804,8 @@ reuse for different inputs returns 409. A database trigger protects snapshot inp
 Compiled provider parameters are snapshotted; discovery execution arrives in #39.
 
 List searches or `/api/v1/searches/runs` with `limit` (1–100, default 20) and `offset` (0–10,000).
-Responses contain `items` and `next_offset`, ordered by creation time and UUID. Read a run at
+Responses contain `items` and `next_offset`. Saved definitions are oldest first; run history is newest
+first, with UUID ordering breaking equal creation timestamps. Read a run at
 `/api/v1/searches/runs/{run_id}`; POST its `/cancel` subpath to cancel pending/running discovery.
 Repeated cancellation preserves the result; completed/partial/failed runs remain terminal.
 Cancellation fences only that personal task, preserving shared processing. Worker publication must
@@ -861,6 +862,29 @@ checkbox Space, query focus, save/reload and clearing passed. All six width/text
 above had zero overflow or automated WCAG A/AA violations with reduced motion enabled. See
 [desktop hints](docs/validation/issue-41-desktop.jpg) and [mobile preview](docs/validation/issue-41-mobile.jpg).
 Component tests use a fake clock for debounce and gates for cancelled/out-of-order responses.
+
+Issue #42 adds manual run selection from the current saved-search page, cancellation and paginated
+discovery history. Availability comes from the server; disabled/unconfigured search explains the
+required setup. A start freezes its saved revision and a UUID request key. Double clicks are blocked;
+an uncertain response retries the same request, while confirmed revision conflicts require reloading
+the saved definition. Keys remain in memory: after a page reload, review history before starting again.
+
+Active runs refresh every five seconds while visible, stop polling on terminal states or read errors,
+and abort requests and remove run caches when leaving the page or changing accounts. HTTP 429 honors
+`Retry-After` (60 seconds when absent) and requires explicit retry. Partial discovery, quota failures,
+temporary failures and configured caps are distinct. Found/new/existing/skipped counts retain backend
+semantics; existing URLs can be shared public sources, not previously seen personal results.
+Separate processing-ready/associated/failed counts do not imply discovery results are fully analyzed.
+Cancellation preserves committed discoveries and shared work. Refresh history manually to update
+processing counts after discovery finishes. Job links await the usable list route in #55.
+
+Issue #42's Chromium pass used the real API, worker and fresh PostgreSQL with a deterministic search
+adapter: complete discovery, partial quota failure, cancellation during provider I/O, reload history
+and cross-owner denial passed. Keyboard selection, Tab, starting and cancellation passed. All six
+width/text-scale combinations above had no overflow or automated WCAG A/AA violations, with reduced
+motion enabled and no external requests or page errors. The [desktop history](docs/validation/issue-42-desktop.jpg)
+and [mobile outcomes](docs/validation/issue-42-mobile.jpg) were visually checked. Component tests cover
+double clicks, uncertain retries, fake-clock visibility/terminal polling, HTTP 429 and session changes.
 
 ### Search provider
 
