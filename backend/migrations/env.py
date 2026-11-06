@@ -7,6 +7,7 @@ from job_hunter.infrastructure import (
     crawl_policy,  # noqa: F401 -- register crawler policy tables
     crawling,  # noqa: F401 -- register crawler checkpoint tables
     documents,  # noqa: F401 -- register document tables
+    embeddings,  # noqa: F401 -- register public vector tables
     jobs,  # noqa: F401 -- register job registry tables
     preparation,  # noqa: F401 -- register public text preparation tables
     profiles,  # noqa: F401 -- register profile tables

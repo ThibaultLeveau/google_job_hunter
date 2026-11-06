@@ -1039,6 +1039,25 @@ size/hash constraints. Interrupted publication leaves no incomplete batch. Sourc
 create separate batches; retrieval requires both identities. This internal feature adds no embeddings,
 vector tuning, API or worker orchestration; those arrive in their subsequent roadmap issues.
 
+### Public job embeddings
+
+Issue #48 adds `EmbedJobs`, the narrow `EmbeddingStore` port and `PostgresEmbeddings`.
+`create_embeddings(database, AISettings, revision)` wires the configured provider. The initial
+database contract is `vector(1536)`; other configured dimensions fail before provider I/O.
+Finite, nonzero float32 vectors are normalized to avoid overflow in cosine distance accumulation.
+Provider/model/revision identify separate spaces; change the revision when a provider changes a model.
+Each call embeds at most 16 chunks within the AI input bound, with at most eight batches per execution
+(configurable 1–128). Remaining work is explicit and resumable. Complete batches and known call usage
+publish atomically; failures retain earlier batches, and concurrent writes reuse immutable vectors.
+An interruption before publication can lose usage evidence; durable budget reservations arrive in #54.
+
+Retrieval requires owner, job, cleaning revision and chunk policy. It checks the owner's association
+and current snapshot before embedding the needed private query, then checks them again in the exact
+cosine-distance query. Results require a complete vector set in the selected model space; ties use
+chunk index and UUID. Source/model/policy changes select separate artifacts, preserving historical
+evidence. Query text/vectors stay transient, with accounting returned to the caller instead of stored
+in public tables. There is no private resume index or ANN index. Worker orchestration remains #51.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.

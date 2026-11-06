@@ -21,6 +21,7 @@ dependencies = [
     "langchain-openai==1.7.4",
     "langsmith==0.14.17",
     "openai==3.46.0",
+    "pgvector==0.5.1",
     "protego==0.7.0",
     "psycopg[binary]==3.3.8",
     "pydantic==2.14.3",
