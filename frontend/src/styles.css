@@ -472,3 +472,5 @@ section {
 .search-and { display: block; color: var(--color-accent); }
 .search-confirm { border-inline-start: 3px solid var(--color-border); padding-inline-start: var(--space-4); }
 .search-editor summary { cursor: pointer; padding-block: var(--space-2); }
+.search-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); padding: var(--space-3); background: var(--color-accent-soft); border-radius: var(--radius-control); }
+.search-preview dd { margin-inline-start: var(--space-4); overflow-wrap: anywhere; }

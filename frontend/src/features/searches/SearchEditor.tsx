@@ -3,6 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import type { components } from '../../../generated/api';
 import { api, ApiError } from '../../shared/api';
 import { Button, Field } from '../../shared/ui';
+import { SearchHints } from './SearchHints';
 
 export type SavedSearch = components['schemas']['SavedSearch'];
 type Definition = components['schemas']['SearchDefinition'];
@@ -20,6 +21,10 @@ export function SearchLogic({ definition }: { definition: Definition }) {
       </span>)}
     </div>)}
     {(definition.exclusions ?? []).length > 0 && <p>Exclude: {(definition.exclusions ?? []).join(' · ')}</p>}
+    <details><summary>Discovery hint values</summary><p>
+      Result language: {definition.language ?? 'provider default'} · Search origin country: {definition.country ?? 'provider default'} · Region: {definition.location ?? 'provider default'} ·
+      Document recency: {definition.recency_days == null ? 'unspecified' : `${String(definition.recency_days)} days`} · Domains: {(definition.sites ?? []).join(', ') || 'unrestricted'}
+    </p></details>
   </div>;
 }
 
@@ -31,6 +36,9 @@ export function SearchEditor({ initial, refreshList, saved, close }: {
   const [name, setName] = useState(initial?.name ?? '');
   const [groups, setGroups] = useState(() => (initial?.definition.groups ?? [['']]).map(group));
   const [exclusions, setExclusions] = useState(() => (initial?.definition.exclusions ?? []).map(term));
+  const [hints, setHints] = useState<Partial<Definition>>(initial?.definition ?? {});
+  const [days, setDays] = useState(initial?.definition.recency_days?.toString() ?? '');
+  const [previewed, setPreviewed] = useState('');
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState('');
   const [latest, setLatest] = useState<SavedSearch | null>(null);
@@ -45,7 +53,9 @@ export function SearchEditor({ initial, refreshList, saved, close }: {
   useLayoutEffect(() => {
     if (focus.current) { document.getElementById(focus.current)?.focus(); focus.current = null; }
   }, [groups, exclusions]);
-  const definition: Definition = { ...basis?.definition, groups: groups.map(value => value.terms.map(item => item.value)), exclusions: exclusions.map(item => item.value) };
+  const definition: Definition = { ...hints, groups: groups.map(value => value.terms.map(item => item.value)), exclusions: exclusions.map(item => item.value), recency_days: days ? Number(days) : null };
+  const complete = [...groups.flatMap(value => value.terms), ...exclusions].every(item => item.value.trim() && Array.from(item.value).length <= 80 && Array.from(normalized(item.value)).length <= 80);
+  const previewReady = complete && (days === '' || /^\d+$/u.test(days) && Number(days) >= 1 && Number(days) <= 365) && previewed === JSON.stringify(definition);
   const mutation = useMutation({ mutationFn: () => {
     const controller = new AbortController(); request.current = controller;
     const body: components['schemas']['SearchWrite'] | components['schemas']['SearchEdit'] = {
@@ -100,6 +110,7 @@ export function SearchEditor({ initial, refreshList, saved, close }: {
       }
       setInvalid(errors); const firstError = Object.keys(errors)[0];
       if (firstError) { document.getElementById(firstError)?.focus(); return; }
+      if (!previewReady) return;
       busy.current = true; setNotice(''); mutation.mutate();
     }}>
       <fieldset disabled={pending} className="search-fields"><legend className="visually-hidden">Search definition</legend>
@@ -139,10 +150,12 @@ export function SearchEditor({ initial, refreshList, saved, close }: {
           </div>)}
           <Button id="search-add-exclusion" tone="secondary" disabled={exclusions.length >= 8} onClick={() => { const item = term(); focus.current = item.id; setExclusions(previous => [...previous, item]); }}>Add exclusion</Button>
         </fieldset>
+        <SearchHints definition={definition} complete={complete} days={days} changeDays={setDays} confirmed={setPreviewed}
+          change={value => { setHints(previous => ({ ...previous, ...value })); }} />
       </fieldset>
       <h3>Your search logic</h3><SearchLogic definition={definition} />
       <div className="search-actions"><Button tone="secondary" disabled={pending} onClick={close}>Cancel editing</Button>
-        <Button type="submit" disabled={pending || requiresReload || missing} loading={mutation.isPending} loadingLabel="Saving search…">Save search</Button></div>
+        <Button type="submit" disabled={pending || requiresReload || missing || complete && !previewReady} loading={mutation.isPending} loadingLabel="Saving search…">Save search</Button></div>
     </form>
   </section>;
 }

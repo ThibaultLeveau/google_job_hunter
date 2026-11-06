@@ -296,7 +296,19 @@ def test_authenticated_preview_round_trips_and_browser_boundary(
     }
     with TestClient(app, base_url=ORIGIN) as client:
         assert client.post(BASE, json=body, headers=HEADERS).status_code == 401
+        assert client.get("/api/v1/searches/hints").status_code == 401
         client.cookies.set("job_hunter_session", TOKEN)
+        hints = client.get("/api/v1/searches/hints")
+        assert hints.status_code == 200
+        assert hints.headers["cache-control"] == "no-store"
+        assert hints.json() == {
+            "allowed_domains": list(ALLOWED),
+            "language_codes": sorted(LANGUAGES),
+            "country_codes": sorted(COUNTRIES),
+        }
+        app.state.search_allowed_domains = ()
+        assert client.get("/api/v1/searches/hints").json()["allowed_domains"] == []
+        app.state.search_allowed_domains = ALLOWED
         assert client.post(BASE, json=body).status_code == 403
         assert (
             client.post(BASE, json=body, headers={"Origin": ORIGIN}).status_code == 403
@@ -333,6 +345,7 @@ def test_authenticated_preview_round_trips_and_browser_boundary(
                 .values(email_verified_at=None)
             )
         client.cookies.set("job_hunter_session", "b" * 43)
+        assert client.get("/api/v1/searches/hints").json() == hints.json()
         # Free, stateless preview also permits authenticated unverified accounts.
         other = client.post(
             BASE,
