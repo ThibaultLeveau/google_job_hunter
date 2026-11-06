@@ -971,6 +971,27 @@ Tests inject HTTP fixtures and exercise the authenticated API, real worker and P
 external traffic. Production workers use bounded public HTTP; provider secrets are unnecessary for
 crawling itself. Read discovery counters separately from later processing readiness.
 
+### Deterministic public text preparation
+
+Issue #45 adds an internal preparation adapter and immutable `job_preparations` artifacts keyed by
+snapshot ID and policy/library/Python version. It uses [Beautiful Soup](https://www.crummy.com/software/BeautifulSoup/bs4/doc/)
+with the explicit HTML parser, discarding scripts, styles, navigation, controls, hidden content and
+embedded active elements. Visible prose and list items retain document order and original language;
+inline text stays together. Ordinary content is `uncertain`, not a confirmed vacancy. Only exact
+error-page markers are `non_job`; empty, unsupported MIME/status/encoding and exceeded limits are explicit.
+
+Each paragraph has a deterministic UUID, SHA-256 and Unicode character offsets into the authoritative
+prepared text, separated by two newlines. Offsets are not raw HTML byte positions. The artifact retains
+the immutable fetch snapshot ID/hash; original bounded bytes remain available for evidence. Escaped
+markup and plain-text responses remain literal text: consumers must never render them as HTML.
+
+Preparation accepts at most 1 MiB, 20,000 traversal visits, depth 128, 2,000 paragraphs and 100,000
+output characters. Exceeding a limit produces no partial text. UTF-8 is the default; explicit UTF-8,
+ISO-8859-1 and Windows-1252 headers are supported. Invalid/other encodings are unsupported, not guessed.
+The internal `PostgresPreparation.run(snapshot_id)` parses outside database transactions and reuses the
+unique committed artifact on redelivery or concurrent execution. No current-result pointer is advanced;
+old revisions remain historical. Durable stage orchestration arrives in #51. No AI or new API is added.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
