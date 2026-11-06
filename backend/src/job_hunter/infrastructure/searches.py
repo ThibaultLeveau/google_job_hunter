@@ -29,7 +29,7 @@ from job_hunter.application.searches import (
 from job_hunter.domain.errors import DomainError
 from job_hunter.domain.searches import SearchDefinition, compile_search
 from job_hunter.domain.tasks import NewTask, TaskKey, require_utc
-from job_hunter.infrastructure.accounts import UserRecord
+from job_hunter.infrastructure.accounts import live_user
 from job_hunter.infrastructure.database import Base, Database
 from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord
 
@@ -134,12 +134,7 @@ class PostgresSearches:
     @contextmanager
     def locked(self, owner: UUID) -> Iterator[Session]:
         with self.database.transaction() as session:
-            if (
-                session.scalar(
-                    select(UserRecord).where(UserRecord.id == owner).with_for_update()
-                )
-                is None
-            ):
+            if live_user(session, owner) is None:
                 raise DomainError("not_found")
             yield session
 

@@ -398,6 +398,27 @@ email/verification or merges accounts; collisions are conflicts and same-owner l
 Password proof shares login limits (5/account and 30/IP per five minutes); Google starts share the
 30/IP per-five-minute OAuth budget. Callback queries stay scrubbed from application access logs.
 
+### Account tombstone fencing
+
+[Issue #147](https://github.com/ThibaultLeveau/google_job_hunter/issues/147) makes
+`users.deleted_at` authoritative for password/Google sign-in, session reads,
+verification, recovery, reauthentication and explicit identity linking. Mutations
+lock and recheck the live user before identities, sessions or private child rows;
+a waiting operation rechecks the tombstone after the deletion transaction commits.
+Password hashing, Google exchanges and mail delivery remain outside these locks.
+Account-bound OAuth starts require the owner's active, unexpired session; anonymous
+sign-in starts retain their existing behavior. Upload publication and saved-search
+mutations also recheck the owner even when HTTP authentication was already cached.
+A rejected upload discards its published blob through the existing storage port.
+
+Pending verification/recovery deliveries skip tombstoned accounts. Mail already
+handed to a transport cannot be recalled; its link cannot modify the tombstoned
+account. This prerequisite adds no deletion endpoint or purge worker: immediate
+revocation, durable cleanup and retention policy belong to
+[issue #63](https://github.com/ThibaultLeveau/google_job_hunter/issues/63).
+`tests/test_account_fencing.py` covers real PostgreSQL lock waits, late Google
+callbacks, mail suppression, upload cleanup and unchanged access for another owner.
+
 ### Personal data export
 
 POST `/api/v1/account/export` with the session cookie, allowed Origin and CSRF header;
@@ -1701,7 +1722,8 @@ Listing an issue here does not authorize implementing it as part of issue #1.
 | 60 | [#60 Explain match scores, gaps, unknowns, and stale results](https://github.com/ThibaultLeveau/google_job_hunter/issues/60) | Job interface | [#59](https://github.com/ThibaultLeveau/google_job_hunter/issues/59), [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53), [#54](https://github.com/ThibaultLeveau/google_job_hunter/issues/54) |
 | 61 | [#61 Show processing stages and safe retry actions](https://github.com/ThibaultLeveau/google_job_hunter/issues/61) | Job interface | [#59](https://github.com/ThibaultLeveau/google_job_hunter/issues/59), [#56](https://github.com/ThibaultLeveau/google_job_hunter/issues/56), [#42](https://github.com/ThibaultLeveau/google_job_hunter/issues/42) |
 | 62 | [#62 Export the authenticated user's profile and research data](https://github.com/ThibaultLeveau/google_job_hunter/issues/62) | Operations and privacy | [#56](https://github.com/ThibaultLeveau/google_job_hunter/issues/56), [#29](https://github.com/ThibaultLeveau/google_job_hunter/issues/29), [#18](https://github.com/ThibaultLeveau/google_job_hunter/issues/18) |
-| 63 | [#63 Delete accounts and private data with race-safe cleanup](https://github.com/ThibaultLeveau/google_job_hunter/issues/63) | Operations and privacy | [#62](https://github.com/ThibaultLeveau/google_job_hunter/issues/62), [#25](https://github.com/ThibaultLeveau/google_job_hunter/issues/25), [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53), [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11), [#18](https://github.com/ThibaultLeveau/google_job_hunter/issues/18), [#16](https://github.com/ThibaultLeveau/google_job_hunter/issues/16), [#30](https://github.com/ThibaultLeveau/google_job_hunter/issues/30) |
+| 62a | [#147 Fence authentication and private writes for tombstoned accounts](https://github.com/ThibaultLeveau/google_job_hunter/issues/147) | Approved prerequisite for #63 | [#62](https://github.com/ThibaultLeveau/google_job_hunter/issues/62), [#18](https://github.com/ThibaultLeveau/google_job_hunter/issues/18), [#16](https://github.com/ThibaultLeveau/google_job_hunter/issues/16), [#25](https://github.com/ThibaultLeveau/google_job_hunter/issues/25), [#30](https://github.com/ThibaultLeveau/google_job_hunter/issues/30) |
+| 63 | [#63 Delete accounts and private data with race-safe cleanup](https://github.com/ThibaultLeveau/google_job_hunter/issues/63) | Operations and privacy | [#62](https://github.com/ThibaultLeveau/google_job_hunter/issues/62), [#25](https://github.com/ThibaultLeveau/google_job_hunter/issues/25), [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53), [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11), [#18](https://github.com/ThibaultLeveau/google_job_hunter/issues/18), [#16](https://github.com/ThibaultLeveau/google_job_hunter/issues/16), [#30](https://github.com/ThibaultLeveau/google_job_hunter/issues/30), [#147](https://github.com/ThibaultLeveau/google_job_hunter/issues/147) |
 | 64 | [#64 Build account settings for identity linking, export, and deletion](https://github.com/ThibaultLeveau/google_job_hunter/issues/64) | Operations and privacy | [#23](https://github.com/ThibaultLeveau/google_job_hunter/issues/23), [#62](https://github.com/ThibaultLeveau/google_job_hunter/issues/62), [#63](https://github.com/ThibaultLeveau/google_job_hunter/issues/63), [#17](https://github.com/ThibaultLeveau/google_job_hunter/issues/17), [#18](https://github.com/ThibaultLeveau/google_job_hunter/issues/18), [#30](https://github.com/ThibaultLeveau/google_job_hunter/issues/30) |
 | 65 | [#65 Expire temporary data, stale artifacts, and abandoned tasks safely](https://github.com/ThibaultLeveau/google_job_hunter/issues/65) | Operations and privacy | [#63](https://github.com/ThibaultLeveau/google_job_hunter/issues/63), [#54](https://github.com/ThibaultLeveau/google_job_hunter/issues/54) |
 | 66 | [#66 Compose a deterministic real-stack test harness and external fixtures](https://github.com/ThibaultLeveau/google_job_hunter/issues/66) | End-to-end quality | [#15](https://github.com/ThibaultLeveau/google_job_hunter/issues/15), [#17](https://github.com/ThibaultLeveau/google_job_hunter/issues/17), [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27), [#37](https://github.com/ThibaultLeveau/google_job_hunter/issues/37), [#43](https://github.com/ThibaultLeveau/google_job_hunter/issues/43), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51) |

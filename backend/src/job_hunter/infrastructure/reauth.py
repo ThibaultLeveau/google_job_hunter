@@ -18,7 +18,12 @@ from job_hunter.application.reauth import (
 from job_hunter.application.sessions import Credential
 from job_hunter.domain.accounts import Unauthenticated
 from job_hunter.domain.errors import DomainError
-from job_hunter.infrastructure.accounts import AuthIdentityRecord, SessionRecord
+from job_hunter.infrastructure.accounts import (
+    AuthIdentityRecord,
+    SessionRecord,
+    UserRecord,
+    live_user,
+)
 from job_hunter.infrastructure.database import Database
 from job_hunter.settings import ConfigurationError
 
@@ -45,8 +50,11 @@ class PostgresProofs(ProofStore):
         with self.database.transaction() as session:
             issuers = set(
                 session.scalars(
-                    select(AuthIdentityRecord.issuer).where(
-                        AuthIdentityRecord.user_id == owner
+                    select(AuthIdentityRecord.issuer)
+                    .join(UserRecord)
+                    .where(
+                        AuthIdentityRecord.user_id == owner,
+                        UserRecord.deleted_at.is_(None),
                     )
                 )
             )
@@ -59,8 +67,11 @@ class PostgresProofs(ProofStore):
     def credential(self, owner: UUID) -> Credential | None:
         with self.database.transaction() as session:
             row = session.scalar(
-                select(AuthIdentityRecord).where(
+                select(AuthIdentityRecord)
+                .join(UserRecord)
+                .where(
                     AuthIdentityRecord.user_id == owner,
+                    UserRecord.deleted_at.is_(None),
                     AuthIdentityRecord.issuer == "password",
                 )
             )
@@ -90,6 +101,8 @@ class PostgresProofs(ProofStore):
 
     def password(self, credential: Credential, digest: str, now: datetime) -> None:
         with self.database.transaction() as session:
+            if live_user(session, credential.user_id) is None:
+                raise Unauthenticated()
             live = session.scalar(
                 select(AuthIdentityRecord.id)
                 .where(
@@ -114,6 +127,8 @@ class PostgresProofs(ProofStore):
         seconds: int,
     ) -> None:
         with self.database.transaction() as session:
+            if live_user(session, owner) is None:
+                raise Unauthenticated()
             if intent == "link":
                 session.execute(
                     insert(AuthIdentityRecord)

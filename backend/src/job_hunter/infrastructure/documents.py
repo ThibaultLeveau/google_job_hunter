@@ -33,7 +33,7 @@ from job_hunter.domain.documents import PARSER_VERSION, Document, ParseResult
 from job_hunter.domain.errors import DomainError
 from job_hunter.domain.extraction import Candidate, Proposal, ProposalPage
 from job_hunter.domain.tasks import NewTask, Task, TaskError, TaskKey
-from job_hunter.infrastructure.accounts import UserRecord
+from job_hunter.infrastructure.accounts import UserRecord, live_user
 from job_hunter.infrastructure.database import Base, Database
 from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord
 from job_hunter.infrastructure.worker import Handler
@@ -539,9 +539,8 @@ class PostgresDocuments(Documents):
         self, owner: UUID, key: str, digest: str, name: str, media_type: str, size: int
     ) -> tuple[Document, bool]:
         with self.database.transaction() as session:
-            session.scalars(
-                select(UserRecord).where(UserRecord.id == owner).with_for_update()
-            ).one()
+            if live_user(session, owner) is None:
+                raise DomainError("not_found")
             rows = list(
                 session.scalars(
                     select(DocumentRecord).where(DocumentRecord.owner_id == owner)

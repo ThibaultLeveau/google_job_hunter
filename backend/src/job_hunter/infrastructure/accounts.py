@@ -75,6 +75,15 @@ class UserRecord(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+def live_user(session: Session, owner: UUID) -> UserRecord | None:
+    # Serialize private writes with account tombstoning before locking child rows.
+    return session.scalar(
+        select(UserRecord)
+        .where(UserRecord.id == owner, UserRecord.deleted_at.is_(None))
+        .with_for_update()
+    )
+
+
 class AuthIdentityRecord(Base):
     __tablename__ = "auth_identities"
     __table_args__ = (
@@ -198,6 +207,7 @@ class PostgresSessions(SessionStore):
                 .join(UserRecord)
                 .where(
                     UserRecord.email_normalized == email,
+                    UserRecord.deleted_at.is_(None),
                     AuthIdentityRecord.issuer == "password",
                 )
             )
@@ -215,6 +225,8 @@ class PostgresSessions(SessionStore):
     ) -> None:
         require_utc(now)
         with self.database.transaction() as session:
+            if live_user(session, credential.user_id) is None:
+                raise Unauthenticated()
             live = session.scalar(
                 select(AuthIdentityRecord.id)
                 .where(
@@ -246,6 +258,11 @@ class PostgresSessions(SessionStore):
     def current(self, digest: str, now: datetime) -> SessionUser:
         require_utc(now)
         with self.database.transaction() as session:
+            owner = session.scalar(
+                select(SessionRecord.user_id).where(SessionRecord.token_hash == digest)
+            )
+            if owner is None or (user := live_user(session, owner)) is None:
+                raise Unauthenticated()
             row = session.scalar(
                 update(SessionRecord)
                 .where(
@@ -258,8 +275,6 @@ class PostgresSessions(SessionStore):
             )
             if row is None:
                 raise Unauthenticated()
-            user = session.get(UserRecord, row.user_id)
-            assert user is not None
             return SessionUser(
                 user.id,
                 user.email,
@@ -505,18 +520,16 @@ class PostgresVerification(VerificationStore):
     def resend(self, user_id: UUID, now: datetime) -> None:
         require_utc(now)
         with self.database.transaction() as session:
-            user = session.scalar(
-                select(UserRecord).where(UserRecord.id == user_id).with_for_update()
-            )
+            user = live_user(session, user_id)
             if user is not None and user.email_verified_at is None:
                 self.enqueue(session, user_id, now)
 
     def consume(self, user_id: UUID, digest: str, now: datetime) -> bool:
         require_utc(now)
         with self.database.transaction() as session:
-            user = session.scalar(
-                select(UserRecord).where(UserRecord.id == user_id).with_for_update()
-            )
+            user = live_user(session, user_id)
+            if user is None:
+                return False
             consumed = session.scalar(
                 delete(VerificationRecord)
                 .where(
@@ -526,7 +539,7 @@ class PostgresVerification(VerificationStore):
                 )
                 .returning(VerificationRecord.id)
             )
-            if user is not None and consumed is not None:
+            if consumed is not None:
                 user.email_verified_at = user.email_verified_at or now
                 return True
             return False
@@ -547,6 +560,7 @@ class PostgresVerification(VerificationStore):
                         MailDeliveryRecord.id == task.payload_ref,
                         VerificationRecord.expires_at > now,
                         UserRecord.email_verified_at.is_(None),
+                        UserRecord.deleted_at.is_(None),
                     )
                 ).one_or_none()
         except SQLAlchemyError:

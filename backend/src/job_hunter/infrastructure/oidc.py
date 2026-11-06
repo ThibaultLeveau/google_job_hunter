@@ -6,7 +6,7 @@ from dataclasses import astuple
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx2 as httpx
 from authlib.integrations.httpx_client import OAuth2Client  # type: ignore[import-untyped]
@@ -36,6 +36,7 @@ from job_hunter.infrastructure.accounts import (
     OidcFlowRecord,
     SessionRecord,
     UserRecord,
+    live_user,
 )
 from job_hunter.infrastructure.database import Database
 from job_hunter.settings import ConfigurationError, Settings
@@ -235,6 +236,21 @@ class PostgresOidc(OidcStore):
         self, state: str, binding: str, previous: str, flow: OidcFlow, now: datetime
     ) -> None:
         with self.database.transaction() as session:
+            if flow.intent != "sign_in":
+                if not flow.owner or live_user(session, UUID(flow.owner)) is None:
+                    raise Unauthenticated()
+                active = session.scalar(
+                    select(SessionRecord.id)
+                    .where(
+                        SessionRecord.user_id == UUID(flow.owner),
+                        SessionRecord.token_hash == previous,
+                        SessionRecord.revoked_at.is_(None),
+                        SessionRecord.expires_at > now,
+                    )
+                    .with_for_update()
+                )
+                if active is None:
+                    raise Unauthenticated()
             expired = (
                 select(OidcFlowRecord.id)
                 .where(OidcFlowRecord.expires_at <= now)
@@ -281,14 +297,26 @@ class PostgresOidc(OidcStore):
             try:
                 with self.database.transaction() as session:
                     owner = session.scalar(
-                        select(AuthIdentityRecord.user_id)
-                        .where(
+                        select(AuthIdentityRecord.user_id).where(
                             AuthIdentityRecord.issuer == ISSUER,
                             AuthIdentityRecord.subject == identity.subject,
                         )
-                        .with_for_update()
                     )
-                    if owner is None:
+                    if owner is not None:
+                        if live_user(session, owner) is None:
+                            raise Unauthenticated()
+                        linked = session.scalar(
+                            select(AuthIdentityRecord.id)
+                            .where(
+                                AuthIdentityRecord.user_id == owner,
+                                AuthIdentityRecord.issuer == ISSUER,
+                                AuthIdentityRecord.subject == identity.subject,
+                            )
+                            .with_for_update()
+                        )
+                        if linked is None:
+                            raise Unauthenticated()
+                    else:
                         email = normalize_email(identity.email)
                         owner = uuid4()
                         session.add(
