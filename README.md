@@ -488,6 +488,13 @@ removes cached source quotes and follows cleanup until completion; failed cleanu
 The UI explains scanned/encrypted/invalid files and unavailable extraction. It does not parse files in
 the browser or review proposals; failed parsing requires a corrected/different file or manual facts.
 
+Issue #33 browser validation used the real API, worker and PostgreSQL with fixture extraction: keyboard
+file selection/upload, TXT/DOCX/scanned PDF handling, duplicate feedback, invalid-content recovery,
+byte-identical download, confirmed deletion with accepted-fact retention, and account isolation passed.
+At 320/768/1440px and 100/200% text scale, there was no horizontal overflow or axe violation; reduced
+motion and keyboard confirmation/cancellation/focus recovery passed. See the document-list
+[desktop](docs/validation/issue-33-desktop.jpg) and deletion [mobile](docs/validation/issue-33-mobile.jpg) captures.
+
 Verified sessions POST raw PDF, DOCX or UTF-8 TXT bytes to `/api/v1/documents` with the matching
 `Content-Type`, percent-encoded UTF-8 `X-Document-Name`, Origin and CSRF headers. The binary body streams;
 signature/container/encoding checks precede persistence.
