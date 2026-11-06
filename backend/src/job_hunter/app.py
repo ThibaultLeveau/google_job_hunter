@@ -57,6 +57,7 @@ from job_hunter.infrastructure.oidc import (
 from job_hunter.infrastructure.profiles import PostgresProfiles
 from job_hunter.infrastructure.reauth import PostgresProofs, recency_seconds
 from job_hunter.infrastructure.recovery import PostgresRecovery
+from job_hunter.infrastructure.searches import PostgresSearches
 from job_hunter.settings import Settings, load_settings
 
 
@@ -117,6 +118,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.allowed_origins = config.allowed_origins
     app.state.search_allowed_domains = config.search_allowed_domains
+    app.state.searches = (
+        PostgresSearches(
+            database, lambda: datetime.now(UTC), config.search_allowed_domains
+        )
+        if database is not None
+        else None
+    )
     app.include_router(searches_router)
     app.state.sessions = (
         Sessions(

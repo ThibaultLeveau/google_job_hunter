@@ -4,6 +4,7 @@ from job_hunter.infrastructure import (
     accounts,  # noqa: F401 -- register account tables
     documents,  # noqa: F401 -- register document tables
     profiles,  # noqa: F401 -- register profile tables
+    searches,  # noqa: F401 -- register search tables
 )
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.tasks import TaskRecord
