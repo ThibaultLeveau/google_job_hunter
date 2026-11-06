@@ -7,6 +7,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import event, text, update
+from starlette.types import Receive, Scope, Send
 from test_discovery import start
 from test_job_metadata import TEXT, cite, extractor, selection
 from test_job_registry import owners as registry_owners
@@ -305,7 +306,13 @@ def test_api_validation_authorization_and_migration(
     app = create_app(Settings(allowed_origins=(ORIGIN,)))
     app.state.sessions.now = lambda: NOW
     app.state.job_listing = create_listing(db, FIXTURE)
-    with TestClient(app, base_url=ORIGIN) as client:
+
+    async def transport(scope: Scope, receive: Receive, send: Send) -> None:
+        await app(scope, receive, send)
+        if scope["type"] == "http":
+            assert scope["query_string"] == b""
+
+    with TestClient(transport, base_url=ORIGIN) as client:
         assert client.get("/api/v1/jobs").status_code == 401
         client.cookies.set("job_hunter_session", TOKEN)
         response = client.get("/api/v1/jobs", params={"run_id": str(runs[0])})

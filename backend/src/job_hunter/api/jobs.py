@@ -2,12 +2,27 @@ from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from job_hunter.api.sessions import authenticated_user
 from job_hunter.application.job_listing import JobListing, JobPage, JobQuery
 from job_hunter.domain.accounts import SessionUser
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
+
+
+class PrivateJobQueries:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"].startswith("/api/v1/jobs"):
+            # Uvicorn retains the transport scope for access logs; parsing uses a copy.
+            private_scope = dict(scope)
+            scope["query_string"] = b""
+            await self.app(private_scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
 
 
 @router.get("")

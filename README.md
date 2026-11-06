@@ -1225,6 +1225,8 @@ Listing uses one SQL statement after authentication, plus one ownership check wh
 ownership and filters precede pagination. Existing association/revision indexes and migration
 `0031_job_listing` index owned match history and canonical alias lookup. Foreign/deleted/cancelled
 run IDs return 404; invalid filters return 422 and unavailable storage returns a safe 503.
+Job query strings are removed from the transport scope used by application-server access logs;
+configure upstream proxies to omit query strings as well.
 
 ### Provider budget ledger
 

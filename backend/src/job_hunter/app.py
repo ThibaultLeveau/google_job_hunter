@@ -14,6 +14,7 @@ from starlette.responses import RedirectResponse
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.documents import router as documents_router
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
+from job_hunter.api.jobs import PrivateJobQueries
 from job_hunter.api.jobs import router as jobs_router
 from job_hunter.api.profiles import router as profiles_router
 from job_hunter.api.reauth import FLOW_COOKIE, FLOW_PATH, install_reauthentication
@@ -192,6 +193,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         RequestBoundary, settings=config, upload_max_bytes=storage.max_bytes
     )
+    app.add_middleware(PrivateJobQueries)
 
     @app.middleware("http")
     async def discard_callback_query(
