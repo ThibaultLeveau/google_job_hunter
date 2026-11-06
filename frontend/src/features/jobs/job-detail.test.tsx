@@ -57,7 +57,8 @@ test('opens a deep link with source facts, original salary units and safe postin
   const link = screen.getByRole('link', { name: /Original posting at jobs.example.org.*opens in a new tab/ });
   expect(link).toHaveAttribute('href', data.source_url); expect(link).toHaveAttribute('target', '_blank'); expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   expect(screen.getByText('A profile evaluation is available.')).toBeVisible(); expect(screen.queryByText(/80%/)).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /retry.*stage|reevaluate/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /retry.*stage/i })).not.toBeInTheDocument();
+  expect(button('Reevaluate profile match')).toBeEnabled();
 });
 
 test('expands evidence and full text with native disclosures and separates requirement classes', async () => {
@@ -187,4 +188,133 @@ test('does not present terminal removed content as pending processing', async ()
   mount(); await screen.findByRole('heading', { name: 'Job title unknown' });
   expect(screen.getByText('Application requirements are unavailable for this source.')).toBeVisible(); expect(screen.getByText('Prepared posting text is unavailable.')).toBeVisible();
   expect(screen.queryByText(/requirements are not ready yet/)).not.toBeInTheDocument(); expect(screen.queryByText(/Some details are still processing/)).not.toBeInTheDocument(); expect(screen.getByText('Profile evaluation is unavailable.')).toBeVisible();
+});
+
+function withMatch(): Detail {
+  const value = fixture(); if (!value.requirements || !value.source || !value.requirements_id || !value.content_id) throw new Error('Missing match fixture');
+  const facts: components['schemas']['EvaluatedProfileFact'][] = [{ id: crypto.randomUUID(), kind: 'skill', skill: 'Python' },
+    { id: crypto.randomUUID(), kind: 'experience', title: 'Software engineer', description: 'Used TypeScript' }, { id: crypto.randomUUID(), kind: 'project', description: 'Built an API' }];
+  const citations: components['schemas']['MatchContext']['citations'] = {};
+  const items = value.requirements.items.map((item, index) => ({ ...item, kind: index === 3 ? 'material' as const : 'job_requirement' as const }));
+  const evaluations: components['schemas']['Evaluation'][] = items.map((item, index) => {
+    const citation = crypto.randomUUID(), span = item.evidence[0]; if (!span) throw new Error('Missing citation'); citations[citation] = span;
+    return { requirement_id: item.id, status: (['matched', 'partial', 'missing', 'unknown'] as const)[index] ?? 'unknown', requirement_evidence: [citation],
+      profile_evidence: index === 0 ? [facts[0]?.id ?? ''] : index === 1 ? facts.slice(1).map(fact => fact.id) : [], rationale: `Evidence explanation ${String(index + 1)}` };
+  });
+  value.match_context = { profile_changed: false, profile_facts: facts, source: value.source, requirements: { ...value.requirements, items }, citations };
+  value.match = { owner: owner.id, profile_revision: 4, job_id: id, snapshot_id: snapshot, source_hash: hash, requirements_id: value.requirements_id,
+    requirements_version: 'requirements-v1', content_id: value.content_id, chunk_version: 'chunks-v1', embedding_space: snapshot, evaluator_version: 'evaluate-v1',
+    rubric_version: 'rubric-v1', prompt_version: 'prompt-v1', model: 'fixture', state: 'ready', reason: null, retrieval_complete: true, evaluations,
+    score: { percent: 67.89, assessed_percent: 80, unknown_count: 1, requirement_count: 4, unknown_weight: 1, total_weight: 5,
+      components: evaluations.map((item, index) => ({ requirement_id: item.requirement_id, status: item.status, weight: index === 3 ? 0 : 2, earned_units: index === 0 ? 4 : index === 1 ? 2 : 0, possible_units: index === 3 ? 0 : 4 })) } };
+  return value;
+}
+
+test('shows server scores, coverage, distinct assessments and links to exact historical evidence', async () => {
+  data = withMatch(); const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' });
+  expect(screen.getByText('67.89%')).toBeVisible(); expect(screen.getByText('80% of weighted job requirements assessed')).toBeVisible();
+  expect(screen.getByText(/does not guarantee eligibility/)).toBeVisible(); await user.click(screen.getByText('Requirement assessments (4)'));
+  for (const name of ['Matched (1)', 'Partial (1)', 'Missing (1)', 'Unknown (1)']) expect(screen.getByRole('heading', { name })).toBeVisible();
+  expect(screen.getByText('Score contribution: 2 of 4 points · Weight 2')).toBeVisible(); expect(screen.getByText(/checklist item; excluded/)).toBeVisible();
+  const profile = within(screen.getByRole('region', { name: 'Matched (1)' })).getByRole('link', { name: 'Python' });
+  await user.click(profile); const target = document.querySelector(profile.getAttribute('href') ?? 'missing'); expect(target).toHaveFocus(); expect(target).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Review your current profile' })).toHaveAttribute('href', '/profile');
+  const source = within(screen.getByRole('region', { name: 'Matched (1)' })).getByRole('link', { name: 'Source excerpt 1' });
+  await user.click(source); expect(document.querySelector(source.getAttribute('href') ?? 'missing')).toHaveFocus();
+  expect(within(document.querySelector(source.getAttribute('href') ?? 'missing') as HTMLElement).getByText('Python required')).toBeVisible();
+});
+
+test.each([false, true])('labels preserved scores outdated while replacement is pending, profile changed=%s', async profile_changed => {
+  data = withMatch(); if (!data.match_context) throw new Error('Missing context'); data.match_context.profile_changed = profile_changed;
+  data.status = { ...data.status, match_current: false, match_stale: true, match_pending: true, match_state: 'stale' };
+  mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); expect(screen.getByText('Outdated result')).toBeVisible();
+  expect(screen.getByText('Outdated match score')).toBeVisible(); expect(screen.getByText('67.89%')).toBeVisible();
+  expect(screen.getByText(profile_changed ? /accepted profile changed/ : /newer evaluation is needed/)).toBeVisible(); expect(button('Reevaluate profile match')).toBeDisabled();
+});
+
+test('keeps unknown scores and empty assessments distinct from zero or no requirements', async () => {
+  data = withMatch(); if (!data.match) throw new Error('Missing match');
+  data.match = { ...data.match, state: 'unknown', evaluations: [], retrieval_complete: false, score: { ...data.match.score, percent: null, assessed_percent: null, components: [], requirement_count: 0, unknown_count: 0 } };
+  data.match_context = null; mount(); await screen.findByRole('heading', { name: 'Senior engineer' });
+  expect(screen.getByText('Score unknown')).toBeVisible(); expect(screen.getByText('Coverage unknown')).toBeVisible(); expect(screen.getByText(/No requirement assessments/)).toBeVisible();
+  expect(screen.getByText(/Evidence retrieval was incomplete/)).toBeVisible(); expect(screen.getByText(/Historical profile and source evidence is unavailable/)).toBeVisible();
+});
+
+test('preserves a valid zero score and labels incomplete evidence without using current facts', async () => {
+  data = withMatch(); if (!data.match || !data.match_context) throw new Error('Missing match'); data.match.score.percent = 0;
+  data.match.score.components = data.match.score.components.map(value => ({ ...value, status: 'unknown' }));
+  data.match_context.profile_facts = []; data.match_context.citations = {}; data.match_context.requirements.items = [];
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); expect(screen.getByText('0%')).toBeVisible();
+  await user.click(screen.getByText('Requirement assessments (4)')); expect(screen.getAllByText('Source excerpt unavailable')).toHaveLength(4);
+  expect(screen.getAllByText(/Accepted fact unavailable/)).toHaveLength(3); expect(screen.getAllByText(/Requirement text unavailable/)).toHaveLength(4);
+  expect(screen.getAllByText(/Unknown evidence; excluded/)).toHaveLength(3);
+});
+
+test.each(['failed', 'unavailable'] as const)('withholds misleading scores from a %s artifact', async state => {
+  data = withMatch(); if (!data.match) throw new Error('Missing match'); data.match.state = state;
+  data.status = { ...data.status, match_state: 'failed', match_current: false, match_reason: 'quota' };
+  mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); expect(screen.queryByText('67.89%')).not.toBeInTheDocument();
+  expect(screen.getByText('Evaluation failed')).toBeVisible(); expect(screen.getByText(/Provider capacity is exhausted/)).toBeVisible(); expect(button('Reevaluate profile match')).toBeEnabled();
+});
+
+test('renders rationale, profile facts and linked source excerpts as literal text', async () => {
+  data = withMatch(); if (!data.match || !data.match_context) throw new Error('Missing match'); const hostile = '<script>alert("private")</script>';
+  data.match.evaluations.forEach(item => { item.rationale = hostile; }); data.match_context.profile_facts.forEach(item => { item.skill = hostile; item.description = hostile; });
+  Object.values(data.match_context.citations).forEach(span => { span.quote = hostile; span.paragraph_id = owner.id; }); data.match_context.source.paragraphs = [];
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(screen.getByText('Requirement assessments (4)'));
+  await user.click(screen.getByText('Profile facts used as evidence (3)')); await user.click(screen.getByText('Job source used as evidence (4)'));
+  expect(screen.getAllByText(hostile).length).toBeGreaterThan(4); expect(screen.getAllByText(/Source paragraph unavailable/).length).toBeGreaterThan(0);
+  expect(document.querySelector('script')).toBeNull();
+});
+
+test('submits one CSRF-protected reevaluation and immediately marks preserved results outdated', async () => {
+  data = withMatch(); const deferred = gate(); let writes = 0, body: unknown;
+  server.use(http.post(path + '/reevaluate', async ({ request }) => { writes++; body = await request.json(); expect(request.headers.get('X-CSRF-Token')).toBe(owner.csrf_token); await deferred.pending; return HttpResponse.json({ generation: 2, status: 'accepted' }, { status: 202 }); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' });
+  await user.dblClick(button('Reevaluate profile match')); expect(button('Requesting reevaluation…')).toBeDisabled(); expect(writes).toBe(1);
+  expect(Object.keys(body as object)).toEqual(['idempotency_key']); expect((body as { idempotency_key: string }).idempotency_key).toMatch(/^[0-9a-f-]{36}$/);
+  server.use(http.get(path, () => failure(503))); deferred.release(); await screen.findByText(/Reevaluation requested/);
+  expect(screen.getByText('Outdated match score')).toBeVisible(); expect(screen.getByText('67.89%')).toBeVisible(); expect(button('Reevaluate profile match')).toBeDisabled();
+});
+
+test.each([0, 503])('retries an uncertain reevaluation request with the same idempotency key (%s)', async status => {
+  data = withMatch(); const keys: unknown[] = []; let fail = true;
+  server.use(http.post(path + '/reevaluate', async ({ request }) => { keys.push(await request.json()); return fail ? status ? failure(status) : HttpResponse.error() : HttpResponse.json({ generation: 2, status: 'accepted' }, { status: 202 }); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Reevaluate profile match'));
+  expect(await screen.findByRole('alert')).toHaveTextContent('could not be confirmed'); expect(screen.getByText('67.89%')).toBeVisible(); fail = false;
+  data.status = { ...data.status, match_current: false, match_pending: true, match_stale: true, match_state: 'stale', reevaluations_remaining: 2 };
+  await user.click(button('Retry reevaluation request')); await screen.findByText(/Reevaluation requested/); expect(keys).toHaveLength(2); expect(keys[1]).toEqual(keys[0]);
+  expect(screen.getByText(/2 reevaluation requests remain/)).toBeVisible();
+});
+
+test.each([409, 429])('reports a refused reevaluation safely and refreshes allowance/context (%s)', async status => {
+  data = withMatch(); server.use(http.post(path + '/reevaluate', () => { if (status === 429) data.status.reevaluations_remaining = 0; return failure(status); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Reevaluate profile match'));
+  expect(await screen.findByRole('alert')).toHaveTextContent(status === 429 ? 'allowance exhausted' : 'evidence or access changed');
+  if (status === 429) await waitFor(() => { expect(button('Retry reevaluation request')).toBeDisabled(); }); expect(screen.queryByText('Private failure detail')).not.toBeInTheDocument();
+});
+
+test.each([401, 403])('discards match evidence when reevaluation authorization expires (%s)', async status => {
+  data = withMatch(); server.use(http.post(path + '/reevaluate', () => { current = null; return failure(status); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Reevaluate profile match'));
+  await screen.findByText(/Your session has expired/); expect(screen.queryByText('67.89%')).not.toBeInTheDocument(); expect(api.queryClient.getQueriesData({ queryKey: ['job-detail'] })).toEqual([]);
+});
+
+test('never restores the prior account’s match when a pending reevaluation response arrives', async () => {
+  data = withMatch(); const deferred = gate(); let aborted = false;
+  server.use(http.post(path + '/reevaluate', async ({ request }) => { request.signal.addEventListener('abort', () => { aborted = true; }); await deferred.pending; return HttpResponse.json({ generation: 2, status: 'accepted' }, { status: 202 }); }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Reevaluate profile match'));
+  server.use(http.get(path, () => failure(404))); act(() => { current = { ...owner, id: snapshot }; api.acceptSession(current); }); await screen.findByText('Job unavailable');
+  deferred.release(); await act(async () => { await deferred.pending; }); expect(aborted).toBe(true); expect(screen.queryByText('67.89%')).not.toBeInTheDocument();
+  expect(api.queryClient.getQueriesData({ queryKey: ['job-detail', owner.id] })).toEqual([]);
+});
+
+test('refreshes the viewed alias after reevaluating its canonical job', async () => {
+  data = withMatch(); data.status.id = snapshot; let reads = 0;
+  server.use(http.get(path, () => { reads++; return HttpResponse.json(data); }), http.post(`http://localhost/api/v1/jobs/${snapshot}/reevaluate`, () => {
+    data.status = { ...data.status, match_state: 'stale', match_stale: true, match_current: false, match_pending: true, reevaluations_remaining: 2 };
+    return HttpResponse.json({ generation: 2, status: 'accepted' }, { status: 202 });
+  }));
+  const user = userEvent.setup(); mount(); await screen.findByRole('heading', { name: 'Senior engineer' }); await user.click(button('Reevaluate profile match'));
+  await screen.findByText(/2 reevaluation requests remain/); expect(reads).toBe(2); expect(screen.getByText('Outdated match score')).toBeVisible();
 });
