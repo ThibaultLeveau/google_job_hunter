@@ -20,6 +20,7 @@ from job_hunter.infrastructure.accounts import (
     RecoveryRecord,
     SessionRecord,
     UserRecord,
+    live_user,
 )
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.tasks import PostgresTaskQueue
@@ -34,11 +35,20 @@ class PostgresRecovery(RecoveryStore):
     def request(self, email: str, now: datetime) -> None:
         require_utc(now)
         with self.database.transaction() as session:
-            identity = session.scalar(
-                select(AuthIdentityRecord)
-                .join(UserRecord)
+            owner = session.scalar(
+                select(UserRecord.id)
                 .where(
                     UserRecord.email_normalized == email,
+                    UserRecord.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if owner is None:
+                return
+            identity = session.scalar(
+                select(AuthIdentityRecord)
+                .where(
+                    AuthIdentityRecord.user_id == owner,
                     AuthIdentityRecord.issuer == "password",
                 )
                 .with_for_update(of=AuthIdentityRecord)
@@ -83,9 +93,9 @@ class PostgresRecovery(RecoveryStore):
                     RecoveryRecord.token_hash == digest, RecoveryRecord.expires_at > now
                 )
             )
-            if record is None:
+            if record is None or live_user(session, record.user_id) is None:
                 return False
-            # Match login's identity-before-session lock order and recheck credentials.
+            # Match login's owner, identity, then session lock order.
             identity = session.scalar(
                 select(AuthIdentityRecord)
                 .where(
@@ -145,6 +155,7 @@ class PostgresRecovery(RecoveryStore):
                     .where(
                         RecoveryDeliveryRecord.id == task.payload_ref,
                         RecoveryRecord.expires_at > now,
+                        UserRecord.deleted_at.is_(None),
                         AuthIdentityRecord.issuer == "password",
                     )
                 ).one_or_none()
