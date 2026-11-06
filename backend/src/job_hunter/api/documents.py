@@ -13,8 +13,10 @@ from starlette.types import Send
 
 from job_hunter.api.sessions import verified_user
 from job_hunter.application.documents import DocumentUploads, PendingUpload
+from job_hunter.application.extraction import Proposals
 from job_hunter.domain.accounts import SessionUser
 from job_hunter.domain.documents import TYPES, Document, InvalidDocument, UploadTooLarge
+from job_hunter.domain.extraction import ProposalPage
 
 router = APIRouter(prefix="/api/v1/documents")
 Owner = Annotated[SessionUser, Depends(verified_user)]
@@ -122,3 +124,16 @@ def download(document_id: UUID, owner: Owner, service: Service) -> StreamingResp
         },
         background=BackgroundTask(file.close),
     )
+
+
+@router.get("/{document_id}/proposals")
+def proposals(
+    document_id: UUID,
+    owner: Owner,
+    request: Request,
+    offset: Annotated[int, Query(ge=0, le=100000)] = 0,
+) -> ProposalPage:
+    service = cast(Proposals | None, request.app.state.proposals)
+    if service is None:
+        raise HTTPException(503)
+    return service.read(owner.user_id, document_id, offset)

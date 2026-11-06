@@ -7,17 +7,19 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event
 
+from job_hunter.application.extraction import ExtractProfile
 from job_hunter.application.worker import Worker
 from job_hunter.infrastructure.accounts import (
     PostgresVerification,
     SmtpMail,
     load_mail_settings,
 )
-from job_hunter.infrastructure.ai import load_ai_settings
+from job_hunter.infrastructure.ai import create_ai, load_ai_settings
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.documents import (
     DocumentParsing,
     LocalStorage,
+    PostgresExtraction,
     load_storage_settings,
 )
 from job_hunter.infrastructure.parsing import IsolatedParser
@@ -41,8 +43,13 @@ def main() -> None:
         description="Run registered durable task handlers."
     )
     parser.add_argument("--concurrency", type=int, choices=range(1, 17), default=2)
+    parser.add_argument(
+        "--profile-fixture", help="Explicit synthetic JSON response for fixture AI."
+    )
     args = parser.parse_args()
-    load_ai_settings()
+    ai_config = load_ai_settings()
+    if ai_config.provider == "fixture" and args.profile_fixture is None:
+        parser.error("Fixture AI requires --profile-fixture.")
     stop = Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda _signal, _frame: stop.set())
@@ -53,8 +60,27 @@ def main() -> None:
         verification = PostgresVerification(database, mail_settings)
         recovery = PostgresRecovery(database, mail_settings)
         storage = load_storage_settings()
+        extraction = PostgresExtraction(
+            database,
+            ExtractProfile(
+                lambda accounting: create_ai(
+                    ai_config,
+                    accounting,
+                    cancelled=stop.is_set,
+                    fixture_response=args.profile_fixture,
+                ),
+                ai_config.model_dump_json(
+                    exclude={"api_key", "environment", "embedding_model", "limits"}
+                ),
+            ),
+            clock.now,
+            ai_config.provider != "disabled",
+        )
+        while not stop.is_set() and extraction.backfill():
+            pass
         handlers = {
             **HANDLERS,
+            **extraction.handlers(),
             **verification.handlers(SmtpMail(mail_settings), clock.now),
             **recovery.handlers(
                 SmtpMail(mail_settings, "Reset your password"), clock.now
@@ -67,6 +93,7 @@ def main() -> None:
                     LocalStorage(storage.root),
                     IsolatedParser(cancelled=stop.is_set),
                     clock.now,
+                    extraction.enqueue,
                 ).handlers()
             )
         with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
