@@ -445,8 +445,9 @@ mail, bound OAuth/linking state, uploads and parsed text, proposals/provenance, 
 facts, saved searches/runs/discovery associations, private matches and retry receipts.
 It also removes owner/run budget buckets and anonymizes reservation references while
 preserving global accounting. Shared public jobs, source snapshots and public
-processing artifacts remain usable by other associated owners. Only an opaque
-completion task and accounting without owner/run links remain for this deletion.
+processing artifacts remain usable by other associated owners. Cleanup retains an
+opaque completion task and accounting without owner/run links; existing unassociated
+task and rate-limit records follow their separate retention policies.
 
 This covers the live database and private volume. Encrypted backup copies remain
 until the operator's separately configured backup-retention expiry; restoring a backup
