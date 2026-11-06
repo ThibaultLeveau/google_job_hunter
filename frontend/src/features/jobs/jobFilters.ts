@@ -9,10 +9,12 @@ const fields = ['keyword', 'run_id', 'region', 'remote', 'match_status', 'salary
 export type Filter = typeof fields[number];
 export type Filters = Record<Filter, string>;
 export function readFilters(params: URLSearchParams): Filters {
-  return Object.fromEntries(fields.map(key => [key, params.get(key) ?? ''])) as Filters;
+  return Object.fromEntries(fields.map(key => {
+    const value = params.get(key) ?? ''; return [key, key === 'run_id' ? value.toLowerCase() : value];
+  })) as Filters;
 }
 export function filterParams(values: Filters) {
-  return new URLSearchParams(fields.filter(key => values[key] && values[key] !== 'false' && !(key === 'sort' && values[key] === 'newest')).map(key => [key, values[key]]));
+  return new URLSearchParams(fields.filter(key => values[key] && !(key.startsWith('include_unknown_') && values[key] === 'false') && !(key === 'sort' && values[key] === 'newest')).map(key => [key, values[key]]));
 }
 function amount(value: string) {
   const [whole = '0', fraction = ''] = value.split('.'); return BigInt(whole + fraction.padEnd(4, '0'));

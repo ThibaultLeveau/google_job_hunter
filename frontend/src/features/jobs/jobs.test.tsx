@@ -299,7 +299,7 @@ test('loads older owned runs and retrieves a deep-linked run beyond the initial 
   server.use(http.get(runPath, ({ request }) => { const offset = new URL(request.url).searchParams.get('offset') ?? ''; offsets.push(offset);
     return HttpResponse.json({ items: offset === '0' ? [recent, cancelled] : [recent, older], next_offset: offset === '0' ? 20 : null }); }),
     http.get(`${runPath}/${older.id}`, () => HttpResponse.json(older)));
-  const user = userEvent.setup(); mount(`/jobs?run_id=${older.id}`); expect(await screen.findByRole('option', { name: /Older engineering/ })).toBeInTheDocument();
+  const user = userEvent.setup(); mount(`/jobs?run_id=${older.id.toUpperCase()}`); expect(await screen.findByRole('option', { name: /Older engineering/ })).toBeInTheDocument();
   expect(field('Search run')).toHaveValue(older.id); expect(screen.queryByRole('option', { name: /Cancelled/ })).not.toBeInTheDocument();
   await user.click(button('Load older search runs')); await waitFor(() => { expect(offsets).toEqual(['0', '20']); });
   expect(screen.getAllByRole('option', { name: /Older engineering/ })).toHaveLength(1);
@@ -349,4 +349,13 @@ test('browser back discards an unsent text edit instead of overwriting the resto
   await waitFor(() => { expect(field('Keyword')).toHaveValue('Python'); });
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); await advance(500); vi.useRealTimers();
   expect(window.location.search).toBe('?keyword=Python'); expect(seen).toEqual(['Python', 'Python']);
+});
+
+
+test('keeps the literal word false in text filters and rejects it as a salary amount', async () => {
+  const seen: URLSearchParams[] = []; server.use(http.get(path, ({ request }) => { seen.push(new URL(request.url).searchParams); return HttpResponse.json({ items, next_cursor: null }); }));
+  const user = userEvent.setup(); mount('/jobs?keyword=false&region=false&include_unknown_region=false'); await screen.findByText('Senior software engineer');
+  expect(seen[0]?.get('keyword')).toBe('false'); expect(seen[0]?.get('region')).toBe('false'); expect(seen[0]?.has('include_unknown_region')).toBe(false);
+  fireEvent.change(field('Minimum salary'), { target: { value: 'false' } }); await user.click(button('Apply filters'));
+  expect(field('Minimum salary')).toHaveAttribute('aria-invalid', 'true'); expect(field('Minimum salary')).toHaveFocus(); expect(seen).toHaveLength(1);
 });
