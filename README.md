@@ -817,6 +817,30 @@ previously known URLs and skipped results. `processing_total` counts associated 
 completion. Tests in `tests/test_saved_searches.py` cover real-PostgreSQL ownership, revisions,
 immutable history, atomic rollback, concurrent start and both cancellation/publication orderings.
 
+### Saved-search editor
+
+Issue #40 replaces the `/searches` placeholder with a private, paginated saved-search list and
+create/edit/delete controls. Named definitions show OR within groups and AND between groups, with
+literal phrases and optional exclusions. The editor bounds groups, terms and exclusions to the API
+contract, associates local validation errors with fields, and shows duplicate-term guidance.
+The server normalizes and validates saved values; the browser does not compile Google queries.
+Existing discovery parameters are preserved when editing groups; their controls arrive in #41.
+
+Edits and confirmed deletions send the saved revision. A conflict or uncertain network outcome
+requires reloading and reviewing before another write; unsaved names, groups and exclusions remain
+in the open editor. The latest saved definition is shown beside the retained draft after reload.
+Deleted definitions cannot be resaved through a stale editor. Drafts are in memory only: cancellation,
+navigation, page reload or an account change discards them. Mutations are never automatically retried.
+
+Issue #40 validation used Chromium with the real API and a fresh PostgreSQL database: create/reload,
+revision-conflict recovery, update, delete and another owner's denied access passed. The keyboard
+pass covered form entry, Tab, associated errors, adding/removing groups/terms/exclusions, save,
+reload, deletion confirmation/cancellation and restored focus. At 320/768/1440px and 100%/200% text
+size, the editor had no page overflow or automated WCAG A/AA violations, with reduced motion enabled.
+See the [desktop](docs/validation/issue-40-desktop.jpg) and [mobile](docs/validation/issue-40-mobile.jpg)
+captures. Component tests cover limits, CRUD, failed requests, stale drafts and session changes.
+No provider calls or search runs were made; browser automation in CI remains planned for #67.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
