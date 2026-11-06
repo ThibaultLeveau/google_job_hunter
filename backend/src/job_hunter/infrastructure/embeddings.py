@@ -1,9 +1,10 @@
+from contextlib import nullcontext
 from uuid import UUID
 
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import CheckConstraint, Float, ForeignKey, Select, String, func, select
 from sqlalchemy.dialects.postgresql import JSONB, insert
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from job_hunter.application.embeddings import EmbedJobs
 from job_hunter.domain.chunks import Chunk, ChunkSet
@@ -122,6 +123,7 @@ class PostgresEmbeddings:
         chunks: tuple[Chunk, ...],
         vectors: tuple[tuple[float, ...], ...],
         records: list[dict[str, object]],
+        transaction: Session | None = None,
     ) -> None:
         if (
             not 1 <= len(chunks) <= 16
@@ -132,7 +134,11 @@ class PostgresEmbeddings:
         values = tuple(vector(value) for value in vectors)
         if not values and not records:
             return
-        with self.database.transaction() as session:
+        with (
+            self.database.transaction()
+            if transaction is None
+            else nullcontext(transaction)
+        ) as session:
             session.execute(
                 insert(EmbeddingSpaceRecord)
                 .values(id=space.id, **space.model_dump())

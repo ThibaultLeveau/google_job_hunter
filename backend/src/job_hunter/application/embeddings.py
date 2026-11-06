@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Protocol
 from uuid import UUID
 
@@ -58,6 +58,14 @@ class EmbeddingTrace(Accounting):
         )
 
 
+@dataclass(frozen=True)
+class EmbeddedBatch:
+    chunks: tuple[Chunk, ...]
+    vectors: tuple[tuple[float, ...], ...]
+    accounting: list[dict[str, object]]
+    error: AIError | None = None
+
+
 class EmbedJobs:
     def __init__(
         self,
@@ -86,31 +94,36 @@ class EmbedJobs:
             pending = self.store.pending(batch, self.space)
             if not pending:
                 break
-            trace = EmbeddingTrace()
-            ai, selected, bound = self.ai(trace), [], 0
-            for chunk in pending[:16]:
-                size = len(chunk.text.encode())
-                if bound + size > ai.limits.input_tokens:
-                    break
-                selected.append(chunk)
-                bound += size
-            if not selected:
-                raise AIError("input_limit")
-            chunks = tuple(selected)
-            try:
-                vectors = tuple(
-                    vector(value)
-                    for value in ai.embed(tuple(c.text for c in chunks)).value
-                )
-            except AIError:
-                self.store.publish(self.space, chunks, (), trace.payload())
-                raise
-            except ValueError:
-                self.store.publish(self.space, chunks, (), trace.payload())
-                raise AIError("invalid_output") from None
-            self.store.publish(self.space, chunks, vectors, trace.payload())
-            written += len(chunks)
+            result = self.execute(pending)
+            self.store.publish(
+                self.space, result.chunks, result.vectors, result.accounting
+            )
+            if result.error is not None:
+                raise result.error
+            written += len(result.chunks)
         return EmbeddingProgress(written, len(self.store.pending(batch, self.space)))
+
+    def execute(self, pending: tuple[Chunk, ...]) -> EmbeddedBatch:
+        trace = EmbeddingTrace()
+        ai, selected, bound = self.ai(trace), [], 0
+        for chunk in pending[:16]:
+            size = len(chunk.text.encode())
+            if bound + size > ai.limits.input_tokens:
+                break
+            selected.append(chunk)
+            bound += size
+        if not selected:
+            raise AIError("input_limit")
+        chunks = tuple(selected)
+        try:
+            vectors = tuple(
+                vector(value) for value in ai.embed(tuple(c.text for c in chunks)).value
+            )
+        except AIError as error:
+            return EmbeddedBatch(chunks, (), trace.payload(), error)
+        except ValueError:
+            return EmbeddedBatch(chunks, (), trace.payload(), AIError("invalid_output"))
+        return EmbeddedBatch(chunks, vectors, trace.payload())
 
     def retrieve(
         self,

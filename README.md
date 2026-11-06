@@ -1058,6 +1058,19 @@ chunk index and UUID. Source/model/policy changes select separate artifacts, pre
 evidence. Query text/vectors stay transient, with accounting returned to the caller instead of stored
 in public tables. There is no private resume index or ANN index. Worker orchestration remains #51.
 
+Issue [#129](https://github.com/ThibaultLeveau/google_job_hunter/issues/129), an approved prerequisite
+to #51, separates `EmbedJobs.execute(pending_chunks)` from publication. It performs at most one
+bounded provider call and returns selected chunks, validated vectors, known accounting and a safe
+error; it writes nothing. Run it before opening the publication transaction. `EmbedJobs.run` keeps
+its existing bounded standalone behavior using this same execution path.
+
+`PostgresChunks.publish(result, transaction=session)` and
+`PostgresEmbeddings.publish(space, chunks, vectors, records, transaction=session)` can join an
+active caller-owned transaction. They neither commit nor close it; rollback removes all their
+writes. Omitting `transaction` preserves standalone publication. The caller must validate its lease
+and subject before publishing and enqueue successors in that same transaction; that wiring remains
+#51. Real PostgreSQL commit/rollback and failure-accounting tests are in `tests/test_stage_publication.py`.
+
 ### Source-verified job metadata
 
 Issue #49 adds `ExtractMetadata` and `PostgresMetadata`, composed by `create_metadata`.
@@ -1327,7 +1340,7 @@ Listing an issue here does not authorize implementing it as part of issue #1.
 | 48 | [#48 Embed job chunks and retrieve evidence through pgvector](https://github.com/ThibaultLeveau/google_job_hunter/issues/48) | AI job processing | [#47](https://github.com/ThibaultLeveau/google_job_hunter/issues/47), [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27) |
 | 49 | [#49 Extract evidence-backed job metadata with explicit unknown values](https://github.com/ThibaultLeveau/google_job_hunter/issues/49) | AI job processing | [#45](https://github.com/ThibaultLeveau/google_job_hunter/issues/45), [#46](https://github.com/ThibaultLeveau/google_job_hunter/issues/46), [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27) |
 | 50 | [#50 Extract a concise application-requirements list with source evidence](https://github.com/ThibaultLeveau/google_job_hunter/issues/50) | AI job processing | [#49](https://github.com/ThibaultLeveau/google_job_hunter/issues/49) |
-| 51 | [#51 Connect versioned crawl, analysis, and embedding stages](https://github.com/ThibaultLeveau/google_job_hunter/issues/51) | AI job processing | [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11), [#48](https://github.com/ThibaultLeveau/google_job_hunter/issues/48), [#50](https://github.com/ThibaultLeveau/google_job_hunter/issues/50) |
+| 51 | [#51 Connect versioned crawl, analysis, and embedding stages](https://github.com/ThibaultLeveau/google_job_hunter/issues/51) | AI job processing | [#11](https://github.com/ThibaultLeveau/google_job_hunter/issues/11), [#48](https://github.com/ThibaultLeveau/google_job_hunter/issues/48), [#50](https://github.com/ThibaultLeveau/google_job_hunter/issues/50), approved prerequisite [#129](https://github.com/ThibaultLeveau/google_job_hunter/issues/129) |
 | 52 | [#52 Evaluate profile fit against explicit job requirements](https://github.com/ThibaultLeveau/google_job_hunter/issues/52) | Personalized matching | [#29](https://github.com/ThibaultLeveau/google_job_hunter/issues/29), [#48](https://github.com/ThibaultLeveau/google_job_hunter/issues/48), [#50](https://github.com/ThibaultLeveau/google_job_hunter/issues/50), [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27) |
 | 53 | [#53 Persist private matches and recompute stale evaluations safely](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) | Personalized matching | [#52](https://github.com/ThibaultLeveau/google_job_hunter/issues/52), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39) |
 | 54 | [#54 Enforce atomic per-user and global provider budgets](https://github.com/ThibaultLeveau/google_job_hunter/issues/54) | Operations and privacy | [#27](https://github.com/ThibaultLeveau/google_job_hunter/issues/27), [#39](https://github.com/ThibaultLeveau/google_job_hunter/issues/39), [#51](https://github.com/ThibaultLeveau/google_job_hunter/issues/51), [#53](https://github.com/ThibaultLeveau/google_job_hunter/issues/53) |
