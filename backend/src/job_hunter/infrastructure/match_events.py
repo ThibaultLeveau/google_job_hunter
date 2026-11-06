@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from job_hunter.domain.tasks import NewTask, TaskKey
+from job_hunter.infrastructure.accounts import live_user
 from job_hunter.infrastructure.database import Base
 from job_hunter.infrastructure.tasks import PostgresTaskQueue
 
@@ -44,6 +45,8 @@ class MatchRequestRecord(Base):
 def enqueue_scan(
     session: Session, owner: UUID | None, job: UUID | None, revision: str, now: datetime
 ) -> None:
+    if owner is not None and live_user(session, owner) is None:
+        return
     if owner is not None and not session.scalar(
         text("""
         SELECT EXISTS(SELECT 1 FROM run_jobs r JOIN search_runs s ON s.id=r.run_id

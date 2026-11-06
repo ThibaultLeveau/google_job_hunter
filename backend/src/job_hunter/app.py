@@ -11,6 +11,7 @@ from starlette.datastructures import QueryParams
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import RedirectResponse
 
+from job_hunter.api.account_deletion import router as account_deletion_router
 from job_hunter.api.boundary import RequestBoundary
 from job_hunter.api.documents import router as documents_router
 from job_hunter.api.errors import ERRORS, ErrorEnvelope, install_error_handlers
@@ -37,6 +38,7 @@ from job_hunter.application.reauth import Reauthentication
 from job_hunter.application.recovery import PasswordRecovery
 from job_hunter.application.sessions import LIFETIME, Sessions
 from job_hunter.domain.accounts import InvalidRegistration, Registration, SessionUser
+from job_hunter.infrastructure.account_deletion import PostgresAccountDeletion
 from job_hunter.infrastructure.accounts import (
     Argon2Passwords,
     PostgresAccounts,
@@ -291,6 +293,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
     app.include_router(exports_router)
+    app.state.account_deletion = (
+        PostgresAccountDeletion(database, lambda: datetime.now(UTC), seconds)
+        if database is not None
+        else None
+    )
+    app.include_router(account_deletion_router)
     app.state.reauthentication = (
         Reauthentication(
             PostgresProofs(database),

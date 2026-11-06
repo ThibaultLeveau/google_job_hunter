@@ -415,11 +415,45 @@ A rejected upload discards its published blob through the existing storage port.
 
 Pending verification/recovery deliveries skip tombstoned accounts. Mail already
 handed to a transport cannot be recalled; its link cannot modify the tombstoned
-account. This prerequisite adds no deletion endpoint or purge worker: immediate
-revocation, durable cleanup and retention policy belong to
-[issue #63](https://github.com/ThibaultLeveau/google_job_hunter/issues/63).
+account. The account-deletion endpoint and cleanup policy are described below.
 `tests/test_account_fencing.py` covers real PostgreSQL lock waits, late Google
 callbacks, mail suppression, upload cleanup and unchanged access for another owner.
+
+### Account deletion
+
+POST `/api/v1/account/delete` with `{"intent":"delete_account"}`, the session cookie,
+allowed Origin and CSRF header. The server derives the owner, rejects extra fields
+and query parameters, and rechecks recent `delete_account` authentication inside the
+write transaction. Success returns 202 `{"status":"deleting"}` and clears session/OAuth
+cookies. All sessions are revoked immediately; the account tombstone invalidates
+verification, password recovery and delayed identity proofs before cleanup starts.
+The tombstone and durable `account_cleanup` task commit together. Subsequent requests
+with the old session receive 401, including a repeated deletion request.
+
+Cleanup removes at most 100 private tasks and 10 document blobs per step. Private
+records remain available to the cleanup worker until their task references and blobs
+are removed. Missing files are harmless; a crash after unlinking retries the same
+step. Storage/database failures use the durable worker retry policy with ten attempts;
+exhausted cleanup remains failed for operator retry after fixing the cause. Missing
+storage configuration never permits discarding database references to existing blobs.
+Uncommitted staging files use the separate storage-sweep command documented below,
+with its one-hour grace period and active-upload protection; scheduled sweeping
+belongs to #65.
+
+The purge removes identities/sessions, verification/recovery tokens and protected
+mail, bound OAuth/linking state, uploads and parsed text, proposals/provenance, profile
+facts, saved searches/runs/discovery associations, private matches and retry receipts.
+It also removes owner/run budget buckets and anonymizes reservation references while
+preserving global accounting. Shared public jobs, source snapshots and public
+processing artifacts remain usable by other associated owners. Only an opaque
+completion task and accounting without owner/run links remain for this deletion.
+
+This covers the live database and private volume. Encrypted backup copies remain
+until the operator's separately configured backup-retention expiry; restoring a backup
+must reconcile subsequent deletions before reopening access. Automated retention and
+backup/restore runbooks belong to #65 and #72. Mail and AI providers may retain data
+already received under their own policies; this endpoint cannot recall messages or
+erase provider-held copies. No backup or external-provider deletion is claimed.
 
 ### Personal data export
 

@@ -9,6 +9,7 @@ from threading import Event
 
 from job_hunter.application.extraction import ExtractProfile
 from job_hunter.application.worker import Worker
+from job_hunter.infrastructure.account_deletion import AccountCleanup
 from job_hunter.infrastructure.accounts import (
     PostgresVerification,
     SmtpMail,
@@ -112,6 +113,11 @@ def main() -> None:
         while cursor is not None and not stop.is_set():
             cursor = matching.backfill(cursor)
         handlers = {
+            **AccountCleanup(
+                database,
+                LocalStorage(storage.root) if storage.root else None,
+                clock.now,
+            ).handlers(),
             **matching.handlers(),
             **HANDLERS,
             **pipeline.handlers(),
