@@ -397,6 +397,36 @@ email/verification or merges accounts; collisions are conflicts and same-owner l
 Password proof shares login limits (5/account and 30/IP per five minutes); Google starts share the
 30/IP per-five-minute OAuth budget. Callback queries stay scrubbed from application access logs.
 
+### Accepted profile facts
+
+Verified sessions can read `GET /api/v1/profile` and `/api/v1/profile/facts/{id}`. Ownership comes
+only from the session; foreign and missing facts return the same 404. The profile ID is the owner's
+UUID. An untouched profile reads as revision zero with no facts; the first write materializes it.
+POST `/api/v1/profile/facts` or PUT `/api/v1/profile/facts/{id}` with
+`{"expected_revision":0,"fact":{"kind":"skill","name":"Python"}}`; DELETE the item with an
+`expected_revision` query parameter. Writes require Origin/CSRF and a current aggregate revision.
+PUT replaces the full fact; omitted optional values become unknown. Responses carry `outcome`,
+`revision` and `fact`: create is 201, existing/updated/deleted are 200;
+stale revisions or duplicate-content conflicts return the standard 409 `conflict` envelope. Refetch
+before resolving conflicts. Only effective inserts, explicit edits or deletes advance revision;
+a stored match revision that differs from the current profile revision is stale.
+
+Fact kinds are skill (`name`), experience (`company`, `title`) and project (`name`, optional `url`).
+Experience/project dates use `YYYY-MM-DD` or null; `ongoing` is true/false/null, and description is
+optional. Unknown is distinct from known values. Reversed dates, ongoing with an end date, blank text,
+unsafe URLs and oversized fields are rejected. Display text is preserved. Exact keys hash sorted JSON
+of kind plus skill name, experience company/title/dates/ongoing, or project name/URL/dates/ongoing.
+Labels use Unicode NFKC, trimmed/collapsed whitespace and casefolding; URLs are only trimmed, retaining
+case-sensitive paths. Descriptions are outside identity. Duplicate insertion preserves existing text;
+differing descriptions conflict instead of overwriting manual edits. Similar names remain separate.
+
+PostgreSQL uniqueness is per owner/kind/key. One transaction locks the owner aggregate, checks its
+revision and writes both facts and revision; reads hold a shared aggregate lock for a coherent snapshot.
+`source_associations` is separate read-only evidence metadata (document UUID, source version, original
+language, locator and exact quote). Manual facts return an empty list; clients cannot submit evidence
+through fact writes. Document foreign keys, source validation and persistent joins arrive in #28;
+upload, extraction, fuzzy matching and profile screens remain their owning issues.
+
 ### Local PostgreSQL and migrations
 
 From the root, start the development-only database (Docker Compose required):
