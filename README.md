@@ -789,6 +789,33 @@ Hard filtering on extracted job metadata is separate future behavior; the respon
 compilation, bounds, unsafe input and authenticated API round trips with local PostgreSQL sessions.
 It needs no provider credential or external service.
 
+Issue #36 adds authenticated saved-search CRUD at `/api/v1/searches` and `/{search_id}`.
+Create with `{name, definition}`; updates add `expected_revision`, and DELETE takes that revision
+as a query parameter. Names are 1–120 characters. Definitions use the preview schema and configured
+site allowlist. Revisions start at 1; stale writes return 409 and foreign/missing IDs return 404.
+Deletion hides the saved definition while retaining historical runs and their independent cancellation.
+
+Verified users can `POST /api/v1/searches/{search_id}/runs` with `expected_revision` and a UUID
+`idempotency_key`; 202 returns the run ID, key, revision, immutable name/definition/query/provider
+parameter snapshot and counters. The run and `search_discovery` task commit atomically. Keys are
+unique per owner: the same search/revision replays the existing run even after edits/deletion;
+reuse for different inputs returns 409. A database trigger protects snapshot inputs from updates.
+Compiled provider parameters are snapshotted; provider execution/configuration arrives in #37/#39.
+
+List searches or `/api/v1/searches/runs` with `limit` (1–100, default 20) and `offset` (0–10,000).
+Responses contain `items` and `next_offset`, ordered by creation time and UUID. Read a run at
+`/api/v1/searches/runs/{run_id}`; POST its `/cancel` subpath to cancel pending/running discovery.
+Repeated cancellation preserves the result; completed/partial/failed runs remain terminal.
+Cancellation fences only that personal task, preserving shared processing. Worker publication must
+lock the task before the run and recheck its active state before creating personal associations.
+
+Run states are pending/running/completed/partial/failed/cancelled; current tasks stay pending until
+#39 registers discovery. Counters distinguish provider results found, newly registered URLs,
+previously known URLs and skipped results. `processing_total` counts associated jobs to analyze;
+`processing_ready` counts those ready for inspection. Discovery completion does not imply analysis
+completion. Tests in `tests/test_saved_searches.py` cover real-PostgreSQL ownership, revisions,
+immutable history, atomic rollback, concurrent start and both cancellation/publication orderings.
+
 | Available since | Working directory | Command contract |
 | --- | --- | --- |
 | [#20](https://github.com/ThibaultLeveau/google_job_hunter/issues/20) | `frontend/` | `npm run generate:api` exports deterministic OpenAPI and generates ignored declarations before checks/build/tests |
