@@ -2,6 +2,7 @@ from alembic import context
 
 from job_hunter.infrastructure import (
     accounts,  # noqa: F401 -- register account tables
+    chunks,  # noqa: F401 -- register public chunk tables
     cleaning,  # noqa: F401 -- register public cleaning tables
     crawl_policy,  # noqa: F401 -- register crawler policy tables
     crawling,  # noqa: F401 -- register crawler checkpoint tables

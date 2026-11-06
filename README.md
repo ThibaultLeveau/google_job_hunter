@@ -1019,6 +1019,26 @@ lose usage evidence; it never establishes zero cost. Model calls hold no databas
 Worker orchestration and global budgets remain #51/#54;
 this issue adds no API, embeddings, metadata extraction or client HTML rendering.
 
+### Deterministic job chunks
+
+Issue #47 adds `ChunkJob` through the narrow `Chunks` application port and `PostgresChunks` adapter.
+Default policy limits each chunk to 1,500 Unicode characters and a conservative 6,000-token upper
+bound measured as UTF-8 bytes, consistent with the AI adapter; it overlaps 150 characters.
+Policies allow 128–2,000 characters, 512–6,000 token-bound bytes and overlap no larger than a quarter
+of the character cap or an eighth of the byte cap. The version hashes all policy settings and revision.
+
+Chunks prefer paragraph ends while advancing at least 50 characters between starts. This keeps the
+100,000-character source limit within 2,048 chunks. Oversized paragraphs split between Unicode code
+points. Each chunk retains exact cleaned offsets plus original paragraph/source spans. Newlines are not
+misrepresented as paragraph evidence. Empty content records an empty completed batch. Identity binds
+the cleaning revision, policy, index and text hash; identical text at different source locations keeps
+its distinct evidence positions. Repeated/concurrent creation does not duplicate these identities.
+
+Batch and chunks publish atomically, with immutable records, uniqueness, foreign keys and database
+size/hash constraints. Interrupted publication leaves no incomplete batch. Source/policy changes
+create separate batches; retrieval requires both identities. This internal feature adds no embeddings,
+vector tuning, API or worker orchestration; those arrive in their subsequent roadmap issues.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
