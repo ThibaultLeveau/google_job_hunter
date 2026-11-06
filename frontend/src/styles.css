@@ -430,3 +430,14 @@ section {
 .profile-editor-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
 .profile-editor-fields textarea { resize: vertical; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.documents { margin-top: var(--space-6); overflow-wrap: anywhere; }
+.document-upload {
+  display: grid; gap: var(--space-3); padding: var(--space-4);
+  border: 2px dashed var(--color-border); border-radius: var(--radius-panel);
+}
+.document-upload p { margin: 0; }
+.document-upload input { width: 100%; min-width: 0; font: inherit; }
+.document-upload input::file-selector-button { min-height: 44px; font: inherit; margin-inline-end: var(--space-2); }
+.document-upload .ui-button { justify-self: start; }
+.document-confirm { border-inline-start: 3px solid var(--color-border); padding-inline-start: var(--space-3); }

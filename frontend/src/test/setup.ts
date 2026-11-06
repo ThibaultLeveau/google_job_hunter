@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { setupServer } from 'msw/node';
+import { http, HttpResponse } from 'msw';
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
 
-export const server = setupServer();
+export const server = setupServer(http.get('http://localhost/api/v1/documents', () => HttpResponse.json([])));
 const unhandledRequests: string[] = [];
 
 beforeAll(() => {
