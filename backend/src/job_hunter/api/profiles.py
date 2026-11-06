@@ -8,6 +8,7 @@ from job_hunter.api.sessions import verified_user
 from job_hunter.application.profiles import FactResult, Profiles, ProfileSnapshot
 from job_hunter.domain.accounts import SessionUser
 from job_hunter.domain.profiles import FactData, ProfileFact, ProfileValue
+from job_hunter.domain.review import ReviewBatch, ReviewResult
 
 router = APIRouter(prefix="/api/v1/profile")
 Owner = Annotated[SessionUser, Depends(verified_user)]
@@ -60,3 +61,8 @@ def delete(
     expected_revision: Annotated[int, Query(ge=0)],
 ) -> FactResult:
     return store.delete(owner.user_id, expected_revision, fact_id)
+
+
+@router.post("/review")
+def review(body: ReviewBatch, owner: Owner, store: Store) -> ReviewResult:
+    return store.review(owner.user_id, body)

@@ -408,7 +408,7 @@ POST `/api/v1/profile/facts` or PUT `/api/v1/profile/facts/{id}` with
 PUT replaces the full fact; omitted optional values become unknown. Responses carry `outcome`,
 `revision` and `fact`: create is 201, existing/updated/deleted are 200;
 stale revisions or duplicate-content conflicts return the standard 409 `conflict` envelope. Refetch
-before resolving conflicts. Only effective inserts, explicit edits or deletes advance revision;
+before resolving conflicts. Effective fact edits, deletes and new accepted evidence advance revision;
 a stored match revision that differs from the current profile revision is stale.
 
 Fact kinds are skill (`name`), experience (`company`, `title`) and project (`name`, optional `url`).
@@ -423,8 +423,21 @@ differing descriptions conflict instead of overwriting manual edits. Similar nam
 PostgreSQL uniqueness is per owner/kind/key. One transaction locks the owner aggregate, checks its
 revision and writes both facts and revision; reads hold a shared aggregate lock for a coherent snapshot.
 `source_associations` is separate read-only evidence metadata (document UUID, source version, original
-language, locator and exact quote). Manual facts return an empty list; clients cannot submit evidence
-through fact writes. Document-backed proposal spans are now persisted; accepted source links arrive in #29.
+language, field, proposal UUID, Unicode span and exact quote). Clients cannot submit evidence through fact writes.
+`user_fields` distinguishes user-provided values/corrections; unsupported links are removed on manual edits.
+
+POST `/api/v1/profile/review` with `expected_revision`, a UUID `idempotency_key`, and 1–100 unique `items`.
+Each item supplies `proposal_id` and `action` (`accept`, `reject`, or `edit`); only `edit` requires a full `fact`.
+Verified ownership and Origin/CSRF are required. Responses contain revision and per-item `created`, `linked`,
+`rejected` or `conflict` outcomes with fact IDs. Foreign/deleted/stale-source proposals return 404 atomically.
+Stale profile revisions or reuse of a key for a different payload return 409: refetch and use a new key.
+Identical keys replay the original response, including its historical revision; they never reapply changes.
+Decisions are final per proposal; identical items replay, while changing a decided item returns conflict.
+Conflicts remain undecided and can be corrected using a new request. Mixed successful decisions commit together.
+Exact matching preserves existing display/manual content; differing descriptions conflict. Explicit edits can
+choose existing content or a distinct natural key. Similar project/employment names never cause fuzzy merges.
+Evidence links retain only fields still supported by immutable source quotes; corrections cannot invent citations.
+Revision advances once per batch that creates facts or adds evidence; rejection/replay alone never advances it.
 
 ### Private document uploads
 
@@ -509,7 +522,7 @@ Only exact normalized skills merge evidence; similarly named employment/projects
 Windows use 500-character pieces/100-character overlap and about 4 KiB; excess over 64 windows,
 128 calls including repair or 512 candidates fails. One task attempt prevents nested paid retries.
 Artifacts survive redelivery; startup backfills 100 per batch. Disabled AI is unavailable. Fixture workers need
-`--profile-fixture` JSON matching `Batch`; review actions arrive in #29.
+`--profile-fixture` JSON matching `Batch`; acceptance requires an explicit profile review request.
 
 ### Local PostgreSQL and migrations
 

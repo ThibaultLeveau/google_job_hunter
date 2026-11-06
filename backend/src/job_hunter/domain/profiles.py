@@ -118,6 +118,10 @@ def same_content(left: FactData, right: FactData) -> bool:
 
 
 class SourceEvidence(ProfileValue):
+    field: str | None = None
+    proposal_id: UUID | None = None
+    start: int | None = None
+    end: int | None = None
     document_id: UUID
     source_version: Annotated[int, Field(ge=1)]
     language: Annotated[str, Field(min_length=1, max_length=80)] | None
@@ -130,5 +134,5 @@ class ProfileFact(ProfileValue):
     data: FactData
     created_at: datetime
     updated_at: datetime
-    # Manual facts have no document evidence; extraction owns future joins.
+    user_fields: tuple[str, ...] = ()
     source_associations: tuple[SourceEvidence, ...] = ()
