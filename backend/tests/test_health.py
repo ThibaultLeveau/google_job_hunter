@@ -105,6 +105,7 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
         "/api/v1/profile",
         "/api/v1/profile/facts/{fact_id}",
         "/api/v1/profile/facts",
+        "/api/v1/profile/review",
         "/api/v1/documents",
         "/api/v1/documents/{document_id}",
         "/api/v1/documents/{document_id}/download",

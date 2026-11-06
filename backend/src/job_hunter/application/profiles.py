@@ -2,6 +2,7 @@ from typing import Literal, Protocol
 from uuid import UUID
 
 from job_hunter.domain.profiles import FactData, ProfileFact, ProfileValue
+from job_hunter.domain.review import ReviewBatch, ReviewResult
 
 
 class ProfileSnapshot(ProfileValue):
@@ -17,6 +18,8 @@ class FactResult(ProfileValue):
 
 
 class Profiles(Protocol):
+    def review(self, owner: UUID, batch: ReviewBatch) -> ReviewResult: ...
+
     def read(self, owner: UUID) -> ProfileSnapshot: ...
     def get(self, owner: UUID, fact_id: UUID) -> ProfileFact: ...
     def put(
