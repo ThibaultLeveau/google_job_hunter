@@ -126,6 +126,7 @@ def test_app_creation_is_deterministic_and_isolated(fake_settings: Settings) -> 
         "/api/v1/documents/{document_id}/proposals",
         "/api/health/live",
         "/api/health/ready",
+        "/api/v1/account/export",
         "/api/auth/providers",
         "/api/auth/google/start",
         "/api/auth/google/callback",
