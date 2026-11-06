@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any, get_args
 from uuid import UUID
 
+from pydantic import TypeAdapter
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func, or_, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -11,7 +12,9 @@ from job_hunter.application.ai import ErrorCode
 from job_hunter.application.crawling import CRAWL
 from job_hunter.application.fetching import FetchErrorCode
 from job_hunter.application.job_details import (
+    EvaluatedProfileFact,
     JobDetail,
+    MatchContext,
     RetryWrite,
     StageStatus,
     WorkAccepted,
@@ -19,7 +22,7 @@ from job_hunter.application.job_details import (
 from job_hunter.domain.cleaning import CleanText
 from job_hunter.domain.errors import DomainError
 from job_hunter.domain.job_metadata import Metadata
-from job_hunter.domain.matching import Match
+from job_hunter.domain.matching import Match, evidence_ids
 from job_hunter.domain.preparation import Preparation
 from job_hunter.domain.requirements import Requirements
 from job_hunter.domain.tasks import TaskError, TaskKey
@@ -28,6 +31,8 @@ from job_hunter.infrastructure.jobs import JobSourceRecord
 from job_hunter.infrastructure.match_scheduling import MatchSchedule
 from job_hunter.infrastructure.matches import access
 from job_hunter.infrastructure.pipeline import PostgresPipeline
+from job_hunter.infrastructure.requirements import RequirementsRecord
+from job_hunter.infrastructure.requirements import source as requirement_source
 from job_hunter.infrastructure.snapshots import PostgresSnapshots
 from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord
 
@@ -222,6 +227,34 @@ class PostgresJobDetails:
                         }
                     )
                 )
+            match = (
+                Match.model_validate_json(json.dumps(matching["result"]))
+                if matching["result"]
+                else None
+            )
+            context = None
+            if match:
+                row = session.get(RequirementsRecord, match.requirements_id)
+                assert row is not None
+                requirements = Requirements.model_validate_json(json.dumps(row.payload))
+                original, _ = requirement_source(session, row.metadata_id)
+                cited = {id for e in match.evaluations for id in e.profile_evidence}
+                facts = TypeAdapter(list[EvaluatedProfileFact]).validate_python(
+                    matching["profile_facts"]
+                )
+                context = MatchContext(
+                    profile_changed=bool(matching["profile_changed"]),
+                    profile_facts=[fact for fact in facts if fact.id in cited],
+                    requirements=requirements,
+                    source=original,
+                    citations={
+                        id: span
+                        for item in requirements.items
+                        for id, span in zip(
+                            evidence_ids(item), item.evidence, strict=True
+                        )
+                    },
+                )
             detail = {
                 "status": {
                     "id": job,
@@ -280,9 +313,8 @@ class PostgresJobDetails:
                 )
                 if artifacts and artifacts.requirements
                 else None,
-                "match": Match.model_validate_json(json.dumps(matching["result"]))
-                if matching["result"]
-                else None,
+                "match": match,
+                "match_context": context,
             }
             return JobDetail.model_validate(detail)
 

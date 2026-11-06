@@ -6,7 +6,7 @@ from pydantic import Field
 
 from job_hunter.application.job_listing import Value
 from job_hunter.domain.cleaning import CleanText
-from job_hunter.domain.job_metadata import Metadata
+from job_hunter.domain.job_metadata import Citation, Metadata
 from job_hunter.domain.matching import Match
 from job_hunter.domain.preparation import Preparation
 from job_hunter.domain.requirements import Requirements
@@ -46,6 +46,22 @@ class JobStatus(Value):
     reevaluations_remaining: int
 
 
+class EvaluatedProfileFact(Value):
+    id: UUID
+    kind: Literal["skill", "experience", "project"]
+    skill: str | None = None
+    title: str | None = None
+    description: str | None = None
+
+
+class MatchContext(Value):
+    profile_changed: bool
+    profile_facts: list[EvaluatedProfileFact]
+    requirements: Requirements
+    source: Preparation
+    citations: dict[UUID, Citation]
+
+
 class JobDetail(Value):
     status: JobStatus
     source_url: str
@@ -59,6 +75,7 @@ class JobDetail(Value):
     metadata: Metadata | None
     requirements: Requirements | None
     match: Match | None
+    match_context: MatchContext | None = None
 
 
 class RetryWrite(Value):

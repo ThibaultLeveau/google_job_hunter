@@ -1297,8 +1297,31 @@ All external/source/model text renders literally, with safe original-posting lin
 Deep links require an authenticated, verified session and an owned discovery. Invalid
 or inaccessible IDs show a safe unavailable state; loading, failed refresh and retry
 states retain a useful route back. Queries are cancelled and private caches cleared
-on account changes. The profile-match section reports availability only; personalized
-explanations and processing retry controls remain separate interface issues.
+on account changes. The profile-match section separates evaluated evidence from public
+job facts; processing retry controls remain a separate interface issue.
+
+Match explanations show server-calculated scores, weighted evidence coverage and
+matched/partial/missing/unknown assessments, with each score contribution when
+meaningful. Unknown evidence is not a confirmed gap, and a score does not establish
+eligibility. Links reveal the exact accepted professional facts and preserved source
+excerpts used by that evaluation; newer facts are never substituted for old evidence.
+The detail API's `match_context` reads those immutable snapshots and exposes only cited
+professional profile facts. It identifies profile revision changes without inferring
+why other evidence became stale. Inaccessible owners cannot read the context.
+
+Outdated results remain explicitly labeled while a replacement is pending or failed.
+Reevaluation uses the existing owner-scoped allowance and provider budgets, blocks
+duplicate submission and reuses the request key after uncertain delivery. Accepted
+requests mark the prior result outdated immediately; refresh checks completion and
+remaining allowance. Account changes abort requests and discard private match caches.
+
+Issue #60 browser validation used the real API, worker and isolated PostgreSQL with
+deterministic providers. Current/unknown scores, profile-change staleness, historical
+evidence links, reevaluation, failed replacement, exhausted allowance and second-owner
+denial passed. Keyboard activation revealed and focused the cited profile/source
+evidence. At 320/768/1440px and 100%/200% text size, the covered layouts had no overflow
+or axe violations. Reviewed [desktop matches](docs/validation/issue-60-desktop.jpg)
+and [mobile matches](docs/validation/issue-60-mobile.jpg) show the outdated-result label.
 
 Issue #59 browser validation used Chromium with the real API, worker and isolated
 PostgreSQL database, with deterministic external adapters. Job facts, checklist and

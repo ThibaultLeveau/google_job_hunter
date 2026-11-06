@@ -24,7 +24,7 @@ from job_hunter.app import create_app
 from job_hunter.application.job_details import RetryWrite
 from job_hunter.domain.errors import DomainError
 from job_hunter.domain.job_metadata import materialize
-from job_hunter.domain.profiles import Skill
+from job_hunter.domain.profiles import Experience, FactData, Project, Skill
 from job_hunter.domain.tasks import StaleLease
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.job_details import PostgresJobDetails, RetryRecord
@@ -65,6 +65,7 @@ def test_detail_provenance_partial_private_stale_and_removed(
     service = PostgresJobDetails(pipeline, matching, clock.now)
     pending = service.detail(owners[0], job)
     assert pending.source is None and pending.metadata is None and pending.match is None
+    assert pending.match_context is None
     assert pending.status.freshness == "pending"
     assert {s.state for s in pending.status.stages} == {"pending"}
     with db.transaction() as session:
@@ -86,6 +87,7 @@ def test_detail_provenance_partial_private_stale_and_removed(
     assert register(db, owners[1], runs[1], URL) == job
     other = service.detail(owners[1], job)
     assert other.source == ready.source and other.match is None
+    assert other.match_context is None
     assert other.status.reevaluations_remaining == 3
     PostgresProfiles(db, clock.now).put(owners[0], 1, Skill(name="Rust"))
     assert service.detail(owners[0], job).status.match_stale
@@ -111,6 +113,9 @@ def test_detail_provenance_partial_private_stale_and_removed(
     assert revised.clean_text and revised.clean_text.text == literal
     assert revised.source.paragraphs[0].id != ready.source.paragraphs[0].id
     assert revised.match == ready.match and revised.status.match_stale
+    assert revised.match_context and ready.match_context
+    assert revised.match_context.source == ready.match_context.source
+    assert revised.match_context.profile_changed
     publish(
         db,
         job,
@@ -394,3 +399,76 @@ def test_known_evidence_uses_preserved_source_segments(
         )
     pipeline.metadata.version = matching.repository.metadata_version = version
     assert service.detail(owners[0], job).status.stages[-1].state == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "fact",
+    [
+        Skill(name="Python"),
+        Experience(company="Private employer", title="Engineer", description="Python"),
+        Project(name="Private project", description="Python"),
+    ],
+)
+def test_match_context_keeps_evaluated_facts_and_historical_citations(
+    isolated_database: Database,
+    owners: tuple[UUID, UUID],
+    runs: tuple[UUID, UUID],
+    fact: FactData,
+) -> None:
+    db = isolated_database
+    repository, job, _ = known_job(db, owners[0], runs[0])
+    pipeline, clock, _ = build(db, owners[0], runs[0])
+    pipeline.cleaner.version = repository.cleaning_version
+    pipeline.metadata.version = repository.metadata_version
+    pipeline.requirements.version = repository.requirements_version
+    pipeline.policy = repository.policy
+    profiles = PostgresProfiles(db, clock.now)
+    initial = profiles.read(owners[0])
+    profiles.delete(owners[0], initial.revision, initial.facts[0].id)
+    accepted = profiles.put(owners[0], initial.revision + 1, fact)
+    assert accepted.fact is not None
+    matching = MatchSchedule(repository, clock.now)
+    service = PostgresJobDetails(pipeline, matching, clock.now)
+    assert service.reevaluate(owners[0], job, uuid4())
+    drain_matches(matching, clock)
+    detail = service.detail(owners[0], job)
+    context = detail.match_context
+    assert context and detail.match and not context.profile_changed
+    assert (
+        context.requirements == detail.requirements and context.source == detail.source
+    )
+    assert [f.id for f in context.profile_facts] == [accepted.fact.id]
+    assert context.profile_facts[0].kind == fact.kind
+    assert "Private employer" not in context.model_dump_json()
+    assert "Private project" not in context.model_dump_json()
+    for evaluation in detail.match.evaluations:
+        for id in evaluation.requirement_evidence:
+            span = context.citations[id]
+            assert context.source.text[span.start : span.end] == span.quote
+            assert span.paragraph_id in {p.id for p in context.source.paragraphs}
+    profiles.delete(owners[0], accepted.revision, accepted.fact.id)
+    stale = service.detail(owners[0], job)
+    assert stale.match == detail.match and stale.match_context
+    assert stale.match_context.profile_changed and stale.status.match_stale
+    assert stale.match_context.profile_facts == context.profile_facts
+    publish(
+        db,
+        job,
+        replace(
+            page(detail.source_url, detail.source_url, b"New posting without Python"),
+            fetched_at=clock.now() + timedelta(hours=1),
+        ),
+    )
+    changed = service.detail(owners[0], job)
+    assert changed.source is None and changed.match_context == stale.match_context
+    assert register(db, owners[1], runs[1], detail.source_url) == job
+    assert service.detail(owners[1], job).match_context is None
+    app = create_app(Settings(allowed_origins=(ORIGIN,)))
+    app.state.sessions.now = lambda: NOW
+    app.state.job_details = service
+    with TestClient(app, base_url=ORIGIN) as client:
+        client.cookies.set("job_hunter_session", TOKEN)
+        body = client.get(f"/api/v1/jobs/{job}").json()
+        assert body["match_context"] == changed.match_context.model_dump(mode="json")
+        client.cookies.set("job_hunter_session", "b" * 43)
+        assert client.get(f"/api/v1/jobs/{job}").json()["match_context"] is None

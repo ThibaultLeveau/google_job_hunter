@@ -319,8 +319,9 @@ class MatchSchedule:
                 .limit(1)
             )
             identity = None
+            profile_record = session.get(ProfileRecord, owner)
             try:
-                if session.get(ProfileRecord, owner) is None:
+                if profile_record is None:
                     raise DomainError("conflict")
                 profile, inputs = self.repository.inputs(session, owner, job)
                 identity = session.scalar(
@@ -355,6 +356,12 @@ class MatchSchedule:
                 "current": current is not None and not failed,
                 "stale": current is None and previous is not None,
                 "result": artifact.payload if artifact else None,
+                "profile_facts": artifact.profile_facts if artifact else [],
+                "profile_changed": bool(
+                    artifact
+                    and profile_record
+                    and artifact.payload["profile_revision"] != profile_record.revision
+                ),
                 "reason": task.error_code if failed and task else None,
                 "reevaluations_remaining": self.allowance(session, owner),
             }

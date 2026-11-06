@@ -6,6 +6,7 @@ import { safeReturnPath } from '../../app/routes';
 import { api, ApiError, sessionKey, type Session } from '../../shared/api';
 import { Badge, Button, StatePanel } from '../../shared/ui';
 import { arrangements, fact, salary, sourceLink, timestamp } from './jobDisplay';
+import { MatchExplanation } from './MatchExplanation';
 
 type Detail = components['schemas']['JobDetail'];
 type Citation = components['schemas']['Citation'];
@@ -101,9 +102,6 @@ export function JobDetail({ ownerId }: { ownerId: string }) {
         {data.source.paragraphs.map((paragraph, index) => <section className="job-source-paragraph" key={paragraph.id}><h4>Paragraph {index + 1}</h4><p className="job-text">{paragraph.text}</p></section>)}</details>
         : <p>Preserved source text is unavailable.</p>}
     </section>
-    <section className="job-detail-panel" aria-labelledby="job-match-heading"><h3 id="job-match-heading">Your profile match</h3>
-      <p>{data.status.match_stale ? 'An earlier profile evaluation is out of date.' : data.status.match_current ? 'A profile evaluation is available.'
-        : data.status.match_state === 'failed' || sourceUnavailable(data) ? 'Profile evaluation is unavailable.' : 'Profile evaluation is pending.'}</p>
-    </section>
+    <MatchExplanation key={data.status.id} data={data} ownerId={ownerId} queryId={id} unavailable={sourceUnavailable(data)} refreshing={query.isFetching} />
   </div>;
 }
