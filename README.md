@@ -891,8 +891,8 @@ double clicks, uncertain retries, fake-clock visibility/terminal polling, HTTP 4
 Issue #43 adds the synchronous `PublicFetcher.fetch(FetchRequest)` port and `HttpFetcher` adapter.
 It performs one GET hop only. A redirect response contains a validated next request with its visited
 URLs; callers must retain that history and apply robots policy and host pacing before fetching it.
-The #118 prerequisite provides robots policy and shared host leases; worker wiring arrives in #44.
-No new API or live crawl is enabled here.
+The #118 prerequisite provides robots policy and shared host leases. Issue #44 registers the
+`job_crawl` handler in the worker; no separate crawl API is added.
 
 Only HTTP/80 and HTTPS/443 are permitted. Credentials, ambiguous address forms, non-public/mixed DNS
 answers, mapped/transition IPv6 and unsafe redirects fail closed. Azure's special
@@ -925,7 +925,7 @@ and [HTTPCore's network-backend contract](https://www.encode.io/httpcore/network
 
 The authorized #44 prerequisites are [#118](https://github.com/ThibaultLeveau/google_job_hunter/issues/118)
 (host policy) followed by [#119](https://github.com/ThibaultLeveau/google_job_hunter/issues/119)
-(snapshot reconciliation). They preserve the existing PR caps; #44 supplies the crawl handler.
+(snapshot reconciliation). They preserve the existing PR caps; #44 composes the crawl handler.
 
 Snapshots retain bounded public bytes (at most 16 MiB), requested/final URLs, HTTP status, MIME,
 UTC fetch time, SHA-256 and immutable UUID/version/previous-version lineage. PostgreSQL verifies
@@ -943,6 +943,32 @@ results must first fence the task within the same transaction, as the worker sto
 Job reads still require an authenticated owner's run association. Private discovery tracking values
 stay in run provenance, not public snapshots. Future processing stages must retain snapshot IDs and
 versions; this prerequisite does not add cleanup, AI, browser fetching or a live worker handler.
+
+### Crawl worker outcomes and recovery
+
+The normal worker now consumes `job_crawl` tasks created by discovery. Each execution attempts one
+checked HTTP hop, then commits its redirect destination/history before durable deferral. Redirect
+limits span all claims and retries. Host waits refund the current failure attempt, have a 24-hour
+capacity allowance, and release task leases; HTTP failures use bounded retries and Retry-After.
+Every destination passes robots policy, shared host pacing and the public HTTP boundary again.
+Robots rules cache for 24 hours; missing/denied status decisions for one hour; unavailability for
+60 seconds or Retry-After. Redirected robots files fail closed. Each host permits one leased request
+and at least one second between completed calls, respecting supported crawl-delay/request-rate rules.
+
+Outcomes distinguish fetched, blocked, removed, unsupported, non-job and failed pages. HTTP 401/403,
+password forms and recognized CAPTCHA markers block processing; 404/410 indicate removal. Missing
+or unsupported MIME is explicit. Empty bodies are non-job outcomes; an empty known app root with
+an explicit JavaScript requirement is unsupported. These checks are conservative; they do not clean
+HTML or decide whether ordinary prose describes a job. Those stages arrive in #45 and later.
+No login, challenge, robots or browser-execution bypass is attempted. Source bytes remain untrusted.
+
+Snapshot/alias publication and task success or permanent failure commit together under the task
+fence. Retry exhaustion and crashed final leases update source failures and owned run counters.
+Initial tasks reuse compatible completed snapshots; manual retries use a fresh generation. Fetch
+observations use request-start timestamps, so late responses cannot replace newer success or denial.
+Tests inject HTTP fixtures and exercise the authenticated API, real worker and PostgreSQL without
+external traffic. Production workers use bounded public HTTP; provider secrets are unnecessary for
+crawling itself. Read discovery counters separately from later processing readiness.
 
 ### Search provider
 

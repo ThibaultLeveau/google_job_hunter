@@ -15,6 +15,8 @@ from job_hunter.infrastructure.accounts import (
     load_mail_settings,
 )
 from job_hunter.infrastructure.ai import create_ai, load_ai_settings
+from job_hunter.infrastructure.crawl_policy import CrawlPolicyStore, PoliteFetcher
+from job_hunter.infrastructure.crawling import PostgresCrawler
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.discovery import PostgresDiscovery
 from job_hunter.infrastructure.documents import (
@@ -23,6 +25,7 @@ from job_hunter.infrastructure.documents import (
     PostgresExtraction,
     load_storage_settings,
 )
+from job_hunter.infrastructure.fetching import HttpFetcher, load_fetch_settings
 from job_hunter.infrastructure.parsing import IsolatedParser
 from job_hunter.infrastructure.recovery import PostgresRecovery
 from job_hunter.infrastructure.search_provider import (
@@ -86,6 +89,15 @@ def main() -> None:
             pass
         handlers = {
             **HANDLERS,
+            **PostgresCrawler(
+                database,
+                PoliteFetcher(
+                    CrawlPolicyStore(database),
+                    HttpFetcher(load_fetch_settings(), now=clock.now),
+                    clock,
+                ),
+                clock,
+            ).handlers(),
             **PostgresDiscovery(database, search_provider, clock.now).handlers(),
             **extraction.handlers(),
             **verification.handlers(SmtpMail(mail_settings), clock.now),

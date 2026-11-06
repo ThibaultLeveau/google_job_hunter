@@ -3,6 +3,7 @@ from alembic import context
 from job_hunter.infrastructure import (
     accounts,  # noqa: F401 -- register account tables
     crawl_policy,  # noqa: F401 -- register crawler policy tables
+    crawling,  # noqa: F401 -- register crawler checkpoint tables
     documents,  # noqa: F401 -- register document tables
     jobs,  # noqa: F401 -- register job registry tables
     profiles,  # noqa: F401 -- register profile tables
