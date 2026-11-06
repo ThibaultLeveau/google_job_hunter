@@ -465,6 +465,43 @@ TXT language stays unknown. Artifacts retain source/text hashes, document/parser
 The worker reuses existing artifacts and checks lease/version plus owner/document tombstones before
 atomically saving text and completing the task. Parsed text remains private; extraction is #28.
 
+### Bounded AI boundary
+
+`application.ai` exposes typed chat/extraction and embedding ports, strict Pydantic `Output`
+schemas and versioned `Prompt` values. `infrastructure.ai.create_ai` composes the configured
+adapter with required accounting hooks and a cancellation predicate for synchronous worker jobs.
+`available` means configured, not a live connectivity/quality probe. Feature prompts arrive in #28 onward.
+
+API and worker startup validate these server-only `JOB_HUNTER_AI_` settings:
+
+| Suffix | Default / contract |
+| --- | --- |
+| `PROVIDER` | `disabled`; supported alternatives `openai` and `fixture` |
+| `ENVIRONMENT` | `production`; fixtures require explicit `development` or `test` |
+| `API_KEY`, `CHAT_MODEL`, `EMBEDDING_MODEL` | Required for OpenAI; select versioned compatible model IDs at deployment |
+| `TEMPERATURE` | Omitted by default; set 0–2 only for a model that supports it |
+| `LIMITS` | JSON object: `input_tokens=16000` (1024–64000), `output_tokens=2000` (1–8000), `seconds=20` (0.01–60), `dimensions=1536` (1–3072) |
+
+The pinned LangChain/OpenAI adapter uses the official HTTPS endpoint, strict JSON Schema and
+no tools, agents, callbacks, tracing, response storage or ambient proxy/base-URL overrides.
+See the [structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs).
+UTF-8 byte bounds conservatively limit byte-BPE input tokens, including prompt/schema/framing.
+Embeddings allow at most 16 nonempty inputs, 8000 bytes each, within the aggregate input bound;
+one request returns finite vectors of the configured dimensions. Output tokens are capped by the request.
+Every call has a request timeout and wall deadline; cancellation aborts and awaits transport cleanup.
+SDK retries are zero. Chat can repair schema failures once with a fixed instruction, without replaying
+invalid output; provider failures/refusals are terminal. Callers must not add automatic task retries
+around these calls; later explicit retries require fresh budget reservations.
+
+Source text travels in a JSON data envelope; output still requires feature-specific evidence checks.
+Accounting reserves before each request and records its UUID, configured model, prompt/schema versions,
+schema hash, bounds, known usage (otherwise null), elapsed time and safe error code. Hooks receive no
+source/output text. Hook failures stop execution; atomic budgets/persistence remain #54.
+Fixtures require an explicit response supplied to the factory; embedding fixtures are deterministic,
+not semantic vectors. Normal tests intercept HTTP and use no credential or paid service.
+The unused LangSmith pytest plugin is disabled; one pinned dependency's Python 3.14 import deprecation
+is narrowly filtered. Other warnings remain errors, and no maintained code is excluded from coverage.
+
 ### Local PostgreSQL and migrations
 
 From the root, start the development-only database (Docker Compose required):
