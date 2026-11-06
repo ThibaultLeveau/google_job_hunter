@@ -1079,6 +1079,27 @@ cached for that revision, with all fields unknown. A crash before publication ca
 Calls run outside database transactions; durable budgets and stage orchestration remain #54/#51.
 This internal stage adds no job endpoint, requirements extraction or derived salary estimates.
 
+### Full application requirements and bounded summaries
+
+Issue #50 adds `ExtractRequirements` and `PostgresRequirements`, composed by `create_requirements`.
+Extraction receives the complete preserved source alongside verified metadata, independently of
+AI cleanup. Each atomic item keeps exact citations, a stable UUID, full original-language text,
+required/preferred/unclear priority and its job-condition/material/instruction/deadline category.
+Explicit English priority cues are validated; unsupported or ambiguous wording stays unclear.
+Contradictory items remain separate. Missing requirements yield unknown; unavailable or failed
+inputs have separate states and never imply eligibility. Calls and response sizes remain bounded.
+
+The plain-text summary is at most 600 Unicode characters, prioritizes required items and includes
+only complete items. `more_requirements` counts every item absent from that summary. Even if the
+first item is too long to display, its full text remains in `items` for detail and matching. Consumers
+must render these strings as text. Deadline text is always preserved; only one valid ISO timestamp
+with an explicit offset is normalized to UTC. Missing/ambiguous dates or timezones remain unknown.
+
+Immutable artifacts and known call records publish atomically, unique by metadata revision plus
+model/configuration/prompt/schema version. Repeated/concurrent delivery reuses artifacts; changes
+create new versions. Failed results are cached for that revision; pre-publication crashes can lose
+usage evidence. Stage orchestration and durable budgets remain #51/#54; no application is submitted.
+
 ### Search provider
 
 Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
