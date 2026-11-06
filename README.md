@@ -800,7 +800,7 @@ Verified users can `POST /api/v1/searches/{search_id}/runs` with `expected_revis
 parameter snapshot and counters. The run and `search_discovery` task commit atomically. Keys are
 unique per owner: the same search/revision replays the existing run even after edits/deletion;
 reuse for different inputs returns 409. A database trigger protects snapshot inputs from updates.
-Compiled provider parameters are snapshotted; provider execution/configuration arrives in #37/#39.
+Compiled provider parameters are snapshotted; discovery execution arrives in #39.
 
 List searches or `/api/v1/searches/runs` with `limit` (1–100, default 20) and `offset` (0–10,000).
 Responses contain `items` and `next_offset`, ordered by creation time and UUID. Read a run at
@@ -815,6 +815,35 @@ previously known URLs and skipped results. `processing_total` counts associated 
 `processing_ready` counts those ready for inspection. Discovery completion does not imply analysis
 completion. Tests in `tests/test_saved_searches.py` cover real-PostgreSQL ownership, revisions,
 immutable history, atomic rollback, concurrent start and both cancellation/publication orderings.
+
+### Search provider
+
+Issue #37 adds the synchronous `SearchProvider` port, SerpApi adapter and synthetic JSON fixtures.
+Authenticated `GET /api/v1/searches/provider` reports disabled/unconfigured/configured/fixture status,
+supported parameters and effective page/result bounds without making a provider request.
+Set server-only `JOB_HUNTER_SEARCH_PROVIDER=serpapi` and `JOB_HUNTER_SEARCH_API_KEY` to configure it;
+the default is disabled. Missing/blank credentials report unconfigured. Invalid settings stop startup
+with a redacted error. `PROVIDER=fixture` requires `JOB_HUNTER_SEARCH_ENVIRONMENT=development` or `test`.
+
+Other `JOB_HUNTER_SEARCH_` settings are `BASE_URL` (trusted HTTPS `/search.json`, default
+`https://serpapi.com/search.json`), `TIMEOUT_SECONDS` (0.01–30, default 10), `MAX_PAGES` (1–10, default 5),
+`MAX_RESULTS` (1–100, default 50) and `MAX_RESPONSE_BYTES` (1,024–2,097,152, default 1,048,576).
+Only compiled `q`, `lr`, `gl`, `location`, `as_qdr` and adapter-owned Google/JSON/pagination parameters
+are sent. [Google organic pagination](https://serpapi.com/blog/filtering-google-search-and-google-news-results/)
+uses up to ten results per call and `start` offsets; the obsolete `num` parameter is omitted.
+Zero-based page indexes and result slots are capped; next-page URLs are validated but never followed
+or returned. The adapter makes one request per fetch, with no redirects, environment proxies or retries,
+an overall deadline and a bounded, uncompressed JSON response. Durable orchestration/budgets are later work.
+
+Results retain title, optional snippet, source URL and absolute rank; snippets are unverified text.
+Malformed entries and credential-bearing URLs are skipped. Missing organic results with successful
+metadata produce an empty page; [auth/quota/rate-limit errors](https://serpapi.com/api-status-and-error-codes),
+timeouts and malformed/provider failures remain distinct errors. Logs contain sanitized request IDs
+and request/received/returned/skipped counters only; raw provider metadata and HTTP diagnostics for
+these calls are suppressed. Fixtures contain no credentials and count zero external requests.
+Run `uv run --locked pytest --require-database tests/test_search_provider.py` from `backend/` for
+transport, pagination, privacy, disabled-state and authenticated-capability tests. No live paid call,
+Google HTML scraping, crawling or search-worker registration is introduced by this issue.
 
 | Available since | Working directory | Command contract |
 | --- | --- | --- |

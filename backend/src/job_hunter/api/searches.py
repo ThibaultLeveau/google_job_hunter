@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import Field
 
 from job_hunter.api.sessions import authenticated_user, verified_user
+from job_hunter.application.search_provider import SearchCapability, SearchProvider
 from job_hunter.application.searches import (
     RunPage,
     SavedSearch,
@@ -53,6 +54,11 @@ def preview_search(
         return compile_search(definition, allowed)
     except ValueError:
         raise HTTPException(422) from None
+
+
+@router.get("/provider")
+def provider_status(request: Request, owner: Owner) -> SearchCapability:
+    return cast(SearchProvider, request.app.state.search_provider).capability
 
 
 @router.get("")

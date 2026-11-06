@@ -1,0 +1,10 @@
+{
+  "search_metadata": {"id": "fixture-search-1", "status": "Success", "json_endpoint": "https://serpapi.com/searches/fixture.json"},
+  "search_parameters": {"q": "synthetic private query"},
+  "organic_results": [
+    {"position": 1, "title": "Développeur Python", "link": "https://jobs.example.org/123", "snippet": "Remote opportunity; unverified snippet."},
+    {"position": 2, "title": "Engineering role", "link": "https://jobs.example.org/456"}
+  ],
+  "ads": [{"title": "Ignore sponsored results"}],
+  "serpapi_pagination": {"next": "https://serpapi.com/search.json?q=synthetic&start=10"}
+}
