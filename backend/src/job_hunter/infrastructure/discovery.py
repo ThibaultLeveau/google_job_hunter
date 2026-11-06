@@ -6,6 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from job_hunter.application.crawling import CRAWL as CRAWL
+from job_hunter.application.crawling import FAILED_STATES
 from job_hunter.application.search_provider import (
     SearchError,
     SearchPage,
@@ -19,12 +21,14 @@ from job_hunter.domain.jobs import canonical_url
 from job_hunter.domain.tasks import NewTask, Task, TaskKey
 from job_hunter.infrastructure.accounts import UserRecord
 from job_hunter.infrastructure.database import Database
-from job_hunter.infrastructure.jobs import PostgresJobRegistry, lock_job_namespace
+from job_hunter.infrastructure.jobs import (
+    JobSourceRecord,
+    PostgresJobRegistry,
+    lock_job_namespace,
+)
 from job_hunter.infrastructure.searches import DISCOVERY, SearchRunRecord
 from job_hunter.infrastructure.tasks import PostgresTaskQueue, TaskRecord
 from job_hunter.infrastructure.worker import Handler
-
-CRAWL = "job_crawl"
 
 
 @dataclass(frozen=True)
@@ -185,6 +189,12 @@ class PostgresDiscovery:
                     row.processing_total += 1
                     row.processing_failed += int(
                         session.scalar(
+                            select(JobSourceRecord.crawl_state).where(
+                                JobSourceRecord.id == found.source_id
+                            )
+                        )
+                        in FAILED_STATES
+                        or session.scalar(
                             select(TaskRecord.status).where(
                                 TaskRecord.kind == CRAWL,
                                 TaskRecord.subject_id == found.source_id,

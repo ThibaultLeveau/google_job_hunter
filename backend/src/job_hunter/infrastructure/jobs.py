@@ -41,6 +41,11 @@ class JobSourceRecord(Base):
             initially="DEFERRED",
         ),
         CheckConstraint("canonical_version > 0", name="ck_job_source_version"),
+        CheckConstraint(
+            "crawl_state IN ('pending','fetched','blocked','removed',"
+            "'unsupported','non_job','failed')",
+            name="ck_job_crawl_state",
+        ),
         ForeignKeyConstraint(
             ["id", "current_snapshot_id"],
             ["job_snapshots.source_id", "job_snapshots.id"],
@@ -56,6 +61,11 @@ class JobSourceRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     current_snapshot_id: Mapped[UUID | None]
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    crawl_state: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending"
+    )
+    crawl_error: Mapped[str | None] = mapped_column(String(32))
+    crawl_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class JobURLRecord(Base):
