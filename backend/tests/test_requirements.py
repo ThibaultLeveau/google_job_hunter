@@ -177,6 +177,7 @@ def test_summary_never_discards_full_mandatory_items_and_ids_are_stable() -> Non
         "Apply Friday at 17:00",
         "Apply 2026-12-01T17:00:00",
         "2026-02-30T12:00:00Z",
+        "0001-01-01T00:00:00+01:00",
         "2026-01-01T12:00Z or 2026-01-02T12:00Z",
     ],
 )
@@ -240,6 +241,34 @@ def test_unknown_empty_plain_text_and_revision_mismatch() -> None:
     )
     malformed = create_requirements(FIXTURE, '{"items": [], "html": "<b>fake</b>"}')
     assert malformed.execute(source, uuid4(), meta).content.reason == "invalid_output"
+
+
+@pytest.mark.parametrize(
+    "case", ["partial_keyword", "borrowed_heading", "valid_heading", "mixed_clauses"]
+)
+def test_priority_evidence_preserves_qualifying_context(case: str) -> None:
+    source = prepared("Required\nPython is not required")
+    if case == "partial_keyword":
+        chosen = [item(source, "required", "required")]
+    else:
+        if case == "valid_heading":
+            source = prepared("Required\nPython")
+        chosen = [item(source, "Python", "required")]
+        chosen[0] = chosen[0].model_copy(
+            update={"evidence": [*chosen[0].evidence, cite(source, "Required")]}
+        )
+    if case == "mixed_clauses":
+        source = prepared("Python is required; Go is preferred")
+        chosen = [
+            item(source, "Python is required", "required"),
+            item(source, "Go is preferred", "preferred"),
+        ]
+    result = extractor(chosen).execute(source, uuid4(), metadata(source)).content
+    assert result.state == (
+        "ready" if case in {"valid_heading", "mixed_clauses"} else "failed"
+    )
+    if result.state == "failed":
+        assert result.reason == "unverified_evidence" and not result.items
 
 
 @pytest.mark.integration

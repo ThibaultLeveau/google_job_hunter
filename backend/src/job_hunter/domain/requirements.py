@@ -9,6 +9,9 @@ from job_hunter.domain.job_metadata import Citation, Metadata, Value, citation
 from job_hunter.domain.preparation import Preparation
 
 SUMMARY_LIMIT = 600
+REQUIRED_CUE = r"\b(must|required|mandatory|essential)\b"
+PREFERRED_CUE = r"\b(preferred|optional|desirable|nice[- ]to[- ]have|not required)\b"
+NEGATED_CUE = r"\bnot\s+(required|optional|preferred)\b"
 
 
 class Candidate(Value):
@@ -43,7 +46,7 @@ def deadline(text: str) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(matches[0]).astimezone(UTC)
-    except ValueError:
+    except ValueError, OverflowError:
         return None
 
 
@@ -67,6 +70,7 @@ def assemble(
             raise ValueError("Unavailable source cannot publish requirements.")
         reason = "source_unavailable"
     unique: dict[UUID, Requirement] = {}
+    negations = tuple(re.finditer(NEGATED_CUE, source.text, re.I))
     for candidate in candidates:
         for span in candidate.evidence:
             citation(source, span)
@@ -77,20 +81,22 @@ def assemble(
         after = source.text[primary.end : primary.end + 1]
         if re.search(r"[\w+#.-]", before + after):
             raise ValueError("Requirement evidence must contain complete tokens.")
-        context = " ".join(span.quote for span in candidate.evidence)
-        required = bool(
-            re.search(r"\b(must|required|mandatory|essential)\b", context, re.I)
-        )
-        preferred = bool(
-            re.search(
-                r"\b(preferred|optional|desirable|nice.to.have|not required)\b",
-                context,
-                re.I,
-            )
-        )
-        if candidate.level != "unclear" and re.search(
-            r"\bnot (required|optional|preferred)\b", context, re.I
+        if any(
+            match.start() < primary.end
+            and match.end() > primary.start
+            and (match.start() < primary.start or match.end() > primary.end)
+            for match in negations
         ):
+            raise ValueError("Requirement evidence omits part of a negated priority.")
+        context = " ".join(span.quote for span in candidate.evidence)
+        if not any(
+            re.search(cue, candidate.text, re.I)
+            for cue in (REQUIRED_CUE, PREFERRED_CUE)
+        ):
+            context = citation(source, primary) + " " + context
+        required = bool(re.search(REQUIRED_CUE, context, re.I))
+        preferred = bool(re.search(PREFERRED_CUE, context, re.I))
+        if candidate.level != "unclear" and re.search(NEGATED_CUE, context, re.I):
             raise ValueError("Negated priority needs an unclear classification.")
         if (candidate.level == "required" and (not required or preferred)) or (
             candidate.level == "preferred" and (not preferred or required)
