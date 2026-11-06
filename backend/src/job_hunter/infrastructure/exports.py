@@ -38,11 +38,14 @@ from job_hunter.infrastructure.searches import SavedSearchRecord, SearchRunRecor
 
 
 def rows[T](session: Session, query: Select[T], budget: ExportBudget) -> Iterator[T]:
-    for row in session.scalars(
-        query.limit(budget.limits.records - budget.records + 1)
-    ).yield_per(1):
-        budget.count()
-        yield row
+    with session.scalars(
+        query.limit(budget.limits.records - budget.records + 1).execution_options(
+            yield_per=1
+        )
+    ) as result:
+        for row in result:
+            budget.count()
+            yield row
 
 
 class PostgresExports:

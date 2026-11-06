@@ -334,9 +334,12 @@ def test_export_snapshot_does_not_mix_concurrent_profile_edits(
     assert fact
     other = Database(Settings())
     changed = False
+    streamed = False
 
     def edit_after_revision(*arguments: object) -> None:
-        nonlocal changed
+        nonlocal changed, streamed
+        if str(arguments[2]).startswith("SELECT profile_facts."):
+            streamed = bool(getattr(arguments[1], "name", None))
         if not changed and str(arguments[2]).startswith("SELECT profiles.revision"):
             changed = True
             PostgresProfiles(other, lambda: NOW).put(
@@ -348,7 +351,7 @@ def test_export_snapshot_does_not_mix_concurrent_profile_edits(
         exported = PersonalExport.model_validate_json(
             PostgresExports(db, lambda: NOW, 300).read(owners[0], token_hash(TOKEN))
         )
-        assert changed and exported.profile.revision == 1
+        assert changed and streamed and exported.profile.revision == 1
         assert exported.profile.facts[0].data == Skill(name="Before")
         assert PostgresProfiles(other, lambda: NOW).read(owners[0]).revision == 2
     finally:
