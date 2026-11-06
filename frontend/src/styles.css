@@ -399,3 +399,21 @@ section {
 }
 .ui-button.google-signin:not(:disabled):hover { background: #f2f2f2; }
 .google-signin svg { width: 20px; height: 20px; flex: none; }
+
+.profile-content { max-width: 58rem; }
+.profile-skill-form { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-4); }
+.profile-skill-form .ui-field { flex: 1 1 16rem; }
+.profile-skill-form .ui-button { align-self: center; }
+.profile-facts { list-style: none; margin: var(--space-4) 0 0; padding: 0; display: grid; gap: var(--space-4); }
+.profile-facts > li {
+  padding: var(--space-4); border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel); background: var(--color-surface); min-width: 0;
+}
+.profile-facts h3 { margin: 0 0 var(--space-2); font-size: var(--text-lg); }
+.profile-description, .profile-evidence blockquote { white-space: pre-wrap; }
+.profile-evidence { margin-block: var(--space-3); }
+.profile-evidence .ui-badge { margin: 0 var(--space-2) var(--space-2) 0; }
+.profile-evidence p { margin-block: var(--space-2); }
+.profile-evidence summary { cursor: pointer; color: var(--color-accent); padding-block: var(--space-2); }
+.profile-evidence ul { padding-inline-start: var(--space-4); }
+.profile-evidence blockquote { margin: var(--space-2) 0; padding-inline-start: var(--space-3); border-inline-start: 3px solid var(--color-border); }

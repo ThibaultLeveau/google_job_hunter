@@ -15,6 +15,7 @@ const denied = () => HttpResponse.json({ code: 'unauthenticated', message: 'Sign
   field_errors: [], request_id: 'bcb2f310-f4a5-4a2d-9871-a220704e5da8' }, { status: 401 });
 
 beforeEach(() => {
+  server.use(http.get('http://localhost/api/v1/profile', () => HttpResponse.json({ id: owner.id, revision: 0, facts: [] })));
   server.use(http.get('http://localhost/api/auth/providers', () => HttpResponse.json({ google: false })));
   api.queryClient.setQueryDefaults(['auth-providers'], { retry: false });
   api.clearSession(); api.queryClient.clear();
@@ -36,10 +37,10 @@ test('withholds protected content until the initial session check completes', as
   server.use(http.get('http://localhost/api/auth/me', async () => { await pending; return HttpResponse.json(owner); }));
   mount('/profile');
   expect(screen.getByRole('status')).toHaveTextContent('Checking your session');
-  expect(screen.queryByText('Profile tools are not available yet')).not.toBeInTheDocument();
+  expect(screen.queryByText('No skills yet. Add a skill you want to use in your job search.')).not.toBeInTheDocument();
   expect(screen.queryByRole('navigation', { name: 'Workspace' })).not.toBeInTheDocument();
   release();
-  expect(await screen.findByText('Profile tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('No skills yet. Add a skill you want to use in your job search.')).toBeVisible();
 });
 
 test.each(workspaceRoutes)('guards $path and retains its internal query and fragment', async route => {
@@ -130,9 +131,9 @@ test('offers a retry when a session check fails instead of showing protected con
   server.use(http.get('http://localhost/api/auth/me', () => HttpResponse.json({}, { status: 503 })));
   const user = userEvent.setup(); mount('/profile');
   expect(await screen.findByRole('alert')).toHaveTextContent('We couldn’t check your session');
-  expect(screen.queryByText('Profile tools are not available yet')).not.toBeInTheDocument();
+  expect(screen.queryByText('No skills yet. Add a skill you want to use in your job search.')).not.toBeInTheDocument();
   sessionResponse(); await user.click(screen.getByRole('button', { name: 'Try again' }));
-  expect(await screen.findByText('Profile tools are not available yet')).toBeVisible();
+  expect(await screen.findByText('No skills yet. Add a skill you want to use in your job search.')).toBeVisible();
 });
 
 test.each([204, 503])('sign out clears private caches and reports the actual %i outcome', async status => {
@@ -155,7 +156,7 @@ test.each([204, 503])('sign out clears private caches and reports the actual %i 
   if (status === 204) {
     expect(await screen.findByText('You are signed out.')).toBeVisible();
     act(() => { api.acceptSession(owner); });
-    expect(await screen.findByText('Profile tools are not available yet')).toBeVisible();
+    expect(await screen.findByText('No skills yet. Add a skill you want to use in your job search.')).toBeVisible();
     sessionResponse(null); await act(async () => { await api.invalidateSession(); });
     expect(await screen.findByText('Your session has expired. Sign in again to continue.')).toBeVisible();
   } else {
