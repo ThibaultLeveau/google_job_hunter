@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { components } from '../../../generated/api';
 import { api, ApiError } from '../../shared/api';
-import { Badge, Button, Field, StatePanel } from '../../shared/ui';
-import { FactEditor, type EditorTarget } from './FactEditor';
+import { Badge, Button, StatePanel } from '../../shared/ui';
+import { FactEditor, SkillNameField, type EditorTarget } from './FactEditor';
 import { Documents } from '../documents/Documents';
 
 type Snapshot = components['schemas']['ProfileSnapshot'];
@@ -125,7 +125,7 @@ export function Profile({ ownerId }: { ownerId: string }) {
         if (!name.trim() || name.length > 120) { setInvalid(true); input.current?.focus(); return; }
         setInvalid(false); run({ kind: 'add', name, revision: snapshot.revision });
       }}>
-        <Field label="Skill name" ref={input} value={name} required maxLength={120} readOnly={mutation.isPending}
+        <SkillNameField ref={input} value={name} required readOnly={mutation.isPending}
           {...(fieldError ? { error: fieldError } : {})} onChange={event => { setName(event.target.value); setInvalid(false); }}
           description="Add one skill at a time. Equivalent names keep the existing skill." />
         <Button type="submit" disabled={blocked} loading={mutation.isPending && mutation.variables.kind === 'add'}
