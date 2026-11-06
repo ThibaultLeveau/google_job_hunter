@@ -9,6 +9,9 @@ import unicodedata
 import zlib
 from collections.abc import Awaitable, Callable, Iterable
 from contextvars import ContextVar
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from math import ceil
 from typing import Literal
 from urllib.parse import urljoin
 
@@ -165,10 +168,21 @@ class HttpFetcher:
         settings: FetchSettings,
         resolver: Resolver = resolve_public,
         backend: httpcore.AsyncNetworkBackend | None = None,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.settings, self.resolver = settings, resolver
         self.backend = backend or httpcore.AnyIOBackend()
         self.slots = threading.BoundedSemaphore(settings.max_connections)
+        self.now = now
+
+    def retry_after(self, value: bytes) -> int | None:
+        if value.isdigit() and len(value) <= 8:
+            return min(int(value), 3600)
+        try:
+            parsed = parsedate_to_datetime(value.decode("ascii"))
+            return max(0, min(3600, ceil((parsed - self.now()).total_seconds())))
+        except ValueError, TypeError, OverflowError, UnicodeError:
+            return None
 
     async def destination(self, url: httpx.URL) -> str:
         host = url.raw_host.decode("ascii")
@@ -275,15 +289,12 @@ class HttpFetcher:
                             FetchRequest(str(target), history),
                         )
                     if not 200 <= response.status < 300:
-                        retry = headers.get(b"retry-after", b"")
                         raise FetchError(
                             "http_status",
                             response.status >= 500
                             or response.status in {408, 425, 429},
                             response.status,
-                            min(int(retry), 3600)
-                            if retry.isdigit() and len(retry) <= 8
-                            else None,
+                            self.retry_after(headers.get(b"retry-after", b"")),
                         )
                     encoding = headers.get(b"content-encoding", b"identity").lower()
                     if encoding not in {b"identity", b"gzip"}:

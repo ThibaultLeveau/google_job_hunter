@@ -53,3 +53,7 @@ class PostgresWorkerStore(WorkerStore):
                 queue.fail(task, error, now)
             else:
                 queue.defer(task, retry_at, now)
+
+    def postpone(self, task: Task, retry_at: datetime, now: datetime) -> None:
+        with self.database.transaction() as session:
+            PostgresTaskQueue(session).postpone(task, retry_at, now)
