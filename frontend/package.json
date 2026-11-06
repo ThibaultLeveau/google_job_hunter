@@ -15,7 +15,9 @@
     "test:coverage": "npm run generate:api && vitest run --coverage",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "generate:api": "node generate-api.mjs"
+    "generate:api": "node generate-api.mjs",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:guards": "node --test --test-concurrency=1 e2e/guards.unit.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "5.106.1",
@@ -31,6 +33,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.65.0",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",

@@ -161,7 +161,7 @@ The real API and isolated PostgreSQL journey verified safe redirects, cookie ses
 sign-out cache clearing. All six 320/768/1440px × 100%/200% text layouts passed with long labels,
 reduced motion, no horizontal overflow and no automated WCAG A/AA violations. Representative
 [desktop](docs/validation/issue-21-desktop.jpg) and [mobile](docs/validation/issue-21-mobile.jpg)
-captures were visually checked. Browser checks are local evidence; browser CI arrives in #67.
+captures were visually checked. Those captures remain local evidence; see [browser CI](#browser-checks).
 
 Email forms use labelled fields, browser autocomplete, a keyboard-operated password visibility toggle
 and native input validation. Server field errors remain beside their fields and receive focus; other
@@ -1047,7 +1047,7 @@ reload, deletion confirmation/cancellation and restored focus. At 320/768/1440px
 size, the editor had no page overflow or automated WCAG A/AA violations, with reduced motion enabled.
 See the [desktop](docs/validation/issue-40-desktop.jpg) and [mobile](docs/validation/issue-40-mobile.jpg)
 captures. Component tests cover limits, CRUD, failed requests, stale drafts and session changes.
-No provider calls or search runs were made; browser automation in CI remains planned for #67.
+No provider calls or search runs were made; [browser CI](#browser-checks) now runs a navigation smoke.
 
 Issue #41 adds country, result-language, region/city, document-recency and domain hints. Country and
 region describe search origin, not job eligibility; Google may rewrite or ignore every hint.
@@ -1756,7 +1756,43 @@ an HTTP bypass route. Files use mode 0600 in private temporary storage; teardown
 Composition requires explicit test mode and rejects inherited production provider settings.
 Helpers live outside the packaged application; no production switch enables this harness.
 Run its smoke and lifecycle tests with `uv run --directory backend --locked pytest
-tests/test_stack_harness.py --require-database`. Playwright configuration follows in #67.
+tests/test_stack_harness.py --require-database`.
+
+## Browser checks
+
+With local PostgreSQL/pgvector running and `TEST_DATABASE_URL` exported, install the locked
+backend/frontend dependencies and run from `frontend/`:
+
+```bash
+uv sync --directory ../backend --locked
+npm ci
+npx playwright install --with-deps chromium
+npm run test:e2e
+npm run test:e2e:guards
+```
+
+The first check builds the production UI and runs one Chromium health/navigation smoke with the
+real API, worker, queue and database. Playwright starts #66's harness and a local preview proxy,
+waits for readiness, resets private test data before each test and tears down the stack afterward.
+It never reuses a running server. `E2E_PORT` defaults to 4175; simultaneous runs need distinct
+ports. Each run generates a private state path; `E2E_STATE` can specify a new path explicitly.
+No provider credentials, alternate application routes or browser-only API mocks are involved.
+
+The three guard probes deliberately fail a browser request, fail after readiness, and supply
+production provider settings. They pass only when the expected failure is reported; the browser
+probes also verify that the API, temporary files and isolated database disappear. All browser
+HTTP requests must remain on the local origin; unexpected requests, WebSockets and page errors
+fail even if the UI catches them. Service workers are blocked. Future journeys reuse the private
+`control` helper for mail/OIDC observations and the existing scenario option.
+
+`Browser quality` runs the checks in unprivileged GitHub Actions with a disposable pgvector
+service, pinned actions and bounded startup/test/shutdown deadlines. Its Ubuntu runner already
+supplies Chromium libraries, so CI downloads the pinned browser without system-package upgrades.
+Failures retain traces,
+screenshots and reports under `frontend/reports/browser/` for three days. Production builds include
+only application assets; the harness and orchestration remain outside the browser bundle.
+See [Playwright's test practices](https://playwright.dev/docs/best-practices) and
+[web-server lifecycle](https://playwright.dev/docs/test-webserver) for the runner contracts.
 
 ## Contribution workflow
 
