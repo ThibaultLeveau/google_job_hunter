@@ -417,3 +417,16 @@ section {
 .profile-evidence summary { cursor: pointer; color: var(--color-accent); padding-block: var(--space-2); }
 .profile-evidence ul { padding-inline-start: var(--space-4); }
 .profile-evidence blockquote { margin: var(--space-2) 0; padding-inline-start: var(--space-3); border-inline-start: 3px solid var(--color-border); }
+
+.profile-dialog {
+  width: min(42rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto;
+  padding: var(--space-6); border: 1px solid var(--color-border); border-radius: var(--radius-panel);
+  background: var(--color-surface); color: var(--color-text); overflow-wrap: anywhere;
+}
+.profile-dialog::backdrop { background: rgb(34 44 42 / 65%); }
+.profile-editor-fields { display: grid; gap: var(--space-4); min-width: 0; border: 0; padding: 0; margin: 0; }
+.profile-date-fields { display: flex; flex-wrap: wrap; gap: var(--space-4); }
+.profile-date-fields > * { flex: 1 1 12rem; }
+.profile-editor-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
+.profile-editor-fields textarea { resize: vertical; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

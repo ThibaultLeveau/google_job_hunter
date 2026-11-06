@@ -407,7 +407,18 @@ Writes use the current profile revision and invalidate its query; conflicts pres
 an explicit reload/review before retrying. Failed refreshes keep visible facts marked out of date and block
 writes. Account changes clear cached facts and remount the form; late responses cannot restore old data.
 Changed accepted facts require job evaluations to refresh; evaluation processing is implemented later.
-Experience/project editors and document upload/review controls remain in their separate issues.
+Document upload/review controls remain in their separate issues.
+
+Experience/project sections provide create/edit dialogs and explicit removal confirmation. Forms use
+the same fact API, including calendar dates, nullable ongoing status, optional descriptions and safe
+HTTP(S) project links. Blank optional values become null. Reversed dates and an ongoing activity with
+an end date are rejected with associated field errors. Saved facts show current evidence alongside
+manual-change guidance; edits retain only supported source links. Duplicate outcomes come from the
+server and keep existing values. Conflicts preserve the draft, show current saved facts after explicit
+reload, and require review before resubmission. A fact removed elsewhere cannot be saved again from
+its old editor. Removal deletes the accepted fact and its links while keeping source documents.
+Dialogs focus the first field, or Cancel for removal, support Escape and keyboard navigation, and
+restore focus to the opener or the section's Add button after removal. Requests cannot be submitted twice.
 
 Issue #31 browser validation used real API/worker/PostgreSQL services with fixture extraction. Keyboard
 addition, duplicate handling, removal, evidence expansion, conflict recovery and focus restoration passed.
@@ -415,6 +426,13 @@ All 320/768/1440px layouts at 100%/200% text scaling, with reduced motion and lo
 had no horizontal overflow or automated WCAG A/AA violations. Visually checked
 [desktop](docs/validation/issue-31-desktop.jpg) and [mobile](docs/validation/issue-31-mobile.jpg) captures
 record the accepted-profile state; automated scans do not establish complete accessibility conformance.
+
+Issue #32 repeats the real API/worker/PostgreSQL journey for experience/project creation, editing,
+server duplicates, date errors, retained conflict drafts, supported evidence and confirmed removal.
+Native dialog entry, Tab/Shift+Tab wrapping, Escape and focus restoration passed keyboard checks.
+The same six viewport/text-scale combinations passed with no horizontal overflow or automated WCAG
+A/AA violations. Visually checked [desktop editor](docs/validation/issue-32-desktop.jpg) and
+[mobile confirmation](docs/validation/issue-32-mobile.jpg) captures record those dialog states.
 
 Verified sessions can read `GET /api/v1/profile` and `/api/v1/profile/facts/{id}`. Ownership comes
 only from the session; foreign and missing facts return the same 404. The profile ID is the owner's
