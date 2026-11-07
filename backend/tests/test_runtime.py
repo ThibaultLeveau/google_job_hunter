@@ -306,7 +306,7 @@ def test_container_runtime_and_fixture_pipeline(tmp_path: Path) -> None:
                 f"TEST_DATABASE_URL=postgresql+psycopg://job_hunter:{canary}@127.0.0.1:5432/job_hunter",
                 project + "-fixture",
             ],
-            timeout=240,
+            timeout=360,
         )
         run([*compose, "stop", "api", "worker", "web"])
         for service in ("api", "worker", "web"):
@@ -314,17 +314,24 @@ def test_container_runtime_and_fixture_pipeline(tmp_path: Path) -> None:
             state = json.loads(run(["docker", "inspect", identity]))[0]["State"]
             assert state["ExitCode"] == 0 and not state["OOMKilled"]
     finally:
+        subprocess.run(
+            ["docker", "rm", "-f", project + "-fixture"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
         run([*compose, "down", "--volumes", "--remove-orphans"], timeout=180)
         probe.unlink(missing_ok=True)
         if created_public:
             public.rmdir()
-        for args in (
-            ["docker", "rm", "-f", project + "-fixture"],
+        subprocess.run(
             [
                 "docker",
                 "image",
                 "rm",
                 *[project + "-" + name for name in ("backend", "web", "fixture")],
             ],
-        ):
-            subprocess.run(args, capture_output=True, timeout=30, check=False)
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )

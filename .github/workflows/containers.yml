@@ -29,11 +29,12 @@ jobs:
           python-version: "3.14"
           enable-cache: false
       - name: Build locked images and verify runtime and fixture pipeline
+        shell: bash
         env:
           RUN_CONTAINER_TESTS: "1"
         run: |
           mkdir -p backend/reports
-          uv run --directory backend --locked pytest tests/test_runtime.py -k container_runtime -q --tb=short > backend/reports/containers.log 2>&1
+          uv run --directory backend --locked pytest tests/test_runtime.py -k container_runtime -q --tb=short 2>&1 | tee backend/reports/containers.log
       - name: Upload failure reports
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

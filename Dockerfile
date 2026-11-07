@@ -5,7 +5,7 @@ WORKDIR /app/backend
 
 FROM python AS backend-build
 COPY --from=uv /uv /usr/local/bin/uv
-ENV UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
+ENV UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1
 COPY backend/pyproject.toml backend/uv.lock ./
 COPY backend/src ./src
 RUN uv sync --locked --no-dev --no-editable --no-cache
