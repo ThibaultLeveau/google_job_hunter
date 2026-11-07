@@ -1742,7 +1742,8 @@ idempotent and `reset --scenario success|duplicate|transient|owner-isolation` re
 These actions require the same `--state` argument. Optional `--port` fixes the API port; otherwise
 it is allocated dynamically. `--frontend-url` defaults to `http://127.0.0.1:5173`.
 
-Search for the single keyword `Python` without filters. Duplicate returns the same canonical job
+Search for the single keyword `Python` without filters, or use `(Python OR Go) AND remote`
+with country `fr`, language `en` and domain `jobs.example.org`. Duplicate returns the same canonical job
 on two pages; transient returns HTTP 503 on the first crawl before durable retry succeeds. Each scenario
 seeds two verified owners for isolation assertions. Crawl/chat/vector fixtures produce a tiny
 synthetic job and versioned artifacts; profile extraction accepts the source text from
@@ -1802,6 +1803,22 @@ resume text, expire a seeded owner's sessions, and inspect deduplication artifac
 They use the private state-file command channel, accept only seeded owners for stateful operations,
 and expose no HTTP routes or production configuration. The guard probes run only `smoke.pw.ts`;
 full journey repetition uses two separate `npm run test:e2e` invocations to verify clean startup.
+
+Issue #69 follows an accepted Python skill through AND/OR discovery, crawl, preparation, cleanup,
+metadata, requirements, chunks, embeddings and a cited match. Database assertions check versioned
+artifact identities, unique durable task keys and one current match per owner/job. Duplicate provider
+pages, repeated runs and another owner's discovery reuse the public artifact chain. Browser checks
+cover source/profile evidence links, filter reload/back navigation, and a profile edit that shows the
+earlier match as stale before the real worker publishes a new revision. A separate crawl-503 scenario
+verifies two attempts on the same durable task and one resulting artifact chain. The second owner
+cannot read the first owner's profile fact, search, run or unassociated job; after discovery the shared
+job has an independent unknown match for that owner's empty profile.
+
+Private commands `jobs --owner UUID`, `pause-worker` and `resume-worker` inspect synthetic artifact
+IDs/versions and stop/restart only the harness worker. Pausing makes the stale-result assertion
+deterministic while the real API and durable queue remain active; tests always resume it afterward.
+These commands share the private state-file channel and add no application endpoints. All journeys
+use bounded state polling without fixed browser sleeps; the suite has a ten-minute global deadline.
 
 `Browser quality` runs the checks in unprivileged GitHub Actions with a disposable pgvector
 service, pinned actions and bounded startup/test/shutdown deadlines. Its Ubuntu runner already
