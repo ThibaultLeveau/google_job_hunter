@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     select,
+    tuple_,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -120,6 +121,17 @@ def run_view(row: SearchRunRecord) -> SearchRun:
     }
     values["counters"] = {name: getattr(row, name) for name in RunCounters.model_fields}
     return SearchRun.model_validate(values)
+
+
+def worker_failed(view: SearchRun) -> SearchRun:
+    return view.model_copy(
+        update={
+            "status": "partial" if view.discovery.pages_completed else "failed",
+            "discovery": view.discovery.model_copy(
+                update={"error_code": "worker_failure"}
+            ),
+        }
+    )
 
 
 class PostgresSearches:
@@ -274,8 +286,31 @@ class PostgresSearches:
                 .limit(limit + 1)
                 .offset(offset)
             ).all()
+            views = [run_view(row) for row in rows[:limit]]
+            active = [
+                (view.id, view.discovery.pages_completed + 1)
+                for view in views
+                if view.status in {"pending", "running"}
+            ]
+            failed = (
+                set(
+                    session.scalars(
+                        select(TaskRecord.subject_id).where(
+                            TaskRecord.kind == DISCOVERY,
+                            TaskRecord.status == "failed",
+                            tuple_(
+                                TaskRecord.subject_id, TaskRecord.subject_version
+                            ).in_(active),
+                        )
+                    )
+                )
+                if active
+                else set()
+            )
             return RunPage(
-                items=tuple(self.view(session, row) for row in rows[:limit]),
+                items=tuple(
+                    worker_failed(view) if view.id in failed else view for view in views
+                ),
                 next_offset=offset + limit if len(rows) > limit else None,
             )
 
@@ -309,14 +344,7 @@ class PostgresSearches:
             )
             is not None
         ):
-            return view.model_copy(
-                update={
-                    "status": "partial" if view.discovery.pages_completed else "failed",
-                    "discovery": view.discovery.model_copy(
-                        update={"error_code": "worker_failure"}
-                    ),
-                }
-            )
+            return worker_failed(view)
         return view
 
     def cancel(self, owner: UUID, run_id: UUID) -> SearchRun:

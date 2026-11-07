@@ -12,6 +12,7 @@
     "typecheck": "npm run generate:api && tsc --noEmit",
     "lint": "npm run generate:api && eslint . --max-warnings 0",
     "test": "npm run generate:api && vitest run",
+    "test:guards": "node --test --test-concurrency=1 e2e/quality.unit.ts",
     "test:coverage": "npm run generate:api && vitest run --coverage",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
