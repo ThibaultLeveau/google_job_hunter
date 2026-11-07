@@ -68,8 +68,8 @@ jobs:
       - name: Verify network, production and failure cleanup guards
         run: npm run test:e2e:guards
 
-      - name: Upload browser failure reports
-        if: failure()
+      - name: Upload browser reports and accessibility screenshots
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-reports-${{ github.run_id }}-${{ github.run_attempt }}

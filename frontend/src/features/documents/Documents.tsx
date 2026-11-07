@@ -207,9 +207,9 @@ export function Documents({ ownerId }: { ownerId: string }) {
         setRetained(previous => previous.filter(item => item.id !== document.id));
         window.document.getElementById('documents-heading')?.focus();
       }} />)}</ul>
-    <div className="profile-editor-actions" aria-label="Document pages">
+    <nav className="profile-editor-actions" aria-label="Document pages">
       <Button tone="secondary" disabled={!offset || list.isFetching} onClick={() => { setOffset(previous => Math.max(0, previous - 100)); }}>Previous documents</Button>
       <Button tone="secondary" disabled={list.isFetching || list.isError || list.data?.length !== 100} onClick={() => { setOffset(previous => previous + 100); }}>Next documents</Button>
-    </div>
+    </nav>
   </section>;
 }
