@@ -42,11 +42,28 @@ async function write(page: Page, target: Locator, value: string): Promise<void> 
   await page.keyboard.insertText(value);
 }
 
-async function contrast(foreground: Locator, background: Locator): Promise<void> {
-  const colors = await Promise.all([
-    foreground.evaluate(element => getComputedStyle(element).color),
-    background.evaluate(element => getComputedStyle(element).backgroundColor),
-  ]);
+async function dialogContrast(target: Locator): Promise<void> {
+  await target.scrollIntoViewIfNeeded();
+  await expect(target).toBeInViewport();
+  const colors = await target.evaluate(element => {
+    const dialog = element.closest('dialog[open]');
+    if (!dialog) throw new Error('Unmeasured contrast outside a native dialog.');
+    const box = element.getBoundingClientRect();
+    const x = Math.max(0, Math.min(innerWidth - 1, box.left + box.width / 2));
+    const y = Math.max(0, Math.min(innerHeight - 1, box.top + box.height / 2));
+    if (!element.contains(document.elementFromPoint(x, y))) throw new Error('Dialog text is obscured.');
+    let background: string | undefined;
+    for (let current: Element | null = element; current && dialog.contains(current); current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.opacity !== '1' || style.filter !== 'none' || style.backgroundImage !== 'none') {
+        throw new Error('Contrast requires manual review of composited colors.');
+      }
+      if (style.backgroundColor.startsWith('rgb(')) background ??= style.backgroundColor;
+      else if (style.backgroundColor !== 'rgba(0, 0, 0, 0)') throw new Error('Translucent background requires manual review.');
+    }
+    if (!background) throw new Error('Missing opaque dialog background.');
+    return [getComputedStyle(element).color, background];
+  });
   const luminance = colors.map(color => {
     expect(color).toMatch(/^rgb\(/);
     const channels = (color.match(/[\d.]+/g) ?? []).map(Number);
@@ -72,21 +89,20 @@ async function audit(page: Page, info: TestInfo, state: string, widths = [320, 7
     const name = `${state}-${String(width)}-${String(scale * 100)}`;
     await info.attach(`${name}-axe`, { body: JSON.stringify({ violations: result.violations, incomplete: result.incomplete }), contentType: 'application/json' });
     expect(result.violations.map(({ id, impact, nodes }) => ({ id, impact, targets: nodes.map(node => node.target) })), name).toEqual([]);
-    // Axe can misidentify native-dialog backgrounds; verify only these reviewed cases directly.
+    // Native top-layer dialogs can confuse axe's background-overlap heuristic.
     for (const rule of result.incomplete) {
       expect(rule.id, `${name}: unexpected manual-review rule`).toBe('color-contrast');
       for (const node of rule.nodes) {
-        const target = node.target.join();
-        if (target === '#delete-help') {
-          await contrast(page.locator(target), page.locator('dialog[open]'));
-        } else {
-          expect(state).toBe('filter-drawer');
-          expect(target).toBe('.job-filter-actions > button[type="button"][data-tone="secondary"]:nth-child(3)');
-          expect(node.any.length).toBeGreaterThan(0);
-          for (const check of node.any) expect(check.data).toMatchObject({ messageKey: 'elmPartiallyObscuring' });
-          const close = page.getByRole('button', { name: 'Close filters', exact: true });
-          await expect(close).toBeInViewport({ ratio: 1 });
-          await contrast(close, close);
+        expect(node.any.length).toBeGreaterThan(0);
+        for (const check of node.any) expect(check.data).toMatchObject({ messageKey: 'elmPartiallyObscuring' });
+        expect(node.target).toHaveLength(1);
+        const selector = node.target[0];
+        expect(typeof selector).toBe('string');
+        if (typeof selector !== 'string') throw new Error('Unexpected contrast target.');
+        const target = page.locator(selector);
+        await dialogContrast(target);
+        if (await target.evaluate(element => element.matches('button, input, select'))) {
+          await expect(target).toBeInViewport({ ratio: 1 });
         }
       }
     }

@@ -16,11 +16,14 @@ successful screenshots, the HTML report and axe results. Download them from the 
 The audit uses [axe with Playwright](https://playwright.dev/docs/accessibility-testing), including
 WCAG 2.0/2.1/2.2 A/AA tags, with no disabled rules or element exclusions. It requires zero reported
 violations, including serious/critical ones. Unexpected incomplete assessments also fail.
-Native-dialog background heuristics can leave the deletion explanation or mobile Close filters
-button unmeasured. Both use direct computed foreground/background checks at 4.5:1; the button
-must also be fully in the viewport. CI's captured button was visibly unobscured despite axe's
-partial-overlap report. No other incomplete targets are accepted.
-The JSON attachments retain those incomplete reports for review rather than presenting them as passes.
+Axe's native-dialog background heuristic can report partial overlap for unobscured headings,
+paragraphs or buttons. Only that specific incomplete contrast reason gets a direct check: the
+node must be inside an open native dialog, scroll into view and pass a hit test; controls must
+be fully visible. Its foreground and nearest opaque background must meet 4.5:1. Translucency,
+background images, opacity/filter compositing and other incomplete reasons fail for review.
+CI screenshots exposed the heading and Close filters false positives; local runs exposed the
+explanation paragraph. JSON retains every incomplete report alongside these direct assertions.
+
 
 At widths 320, 768 and 1440 CSS pixels, each covered state is scanned at 100% and 200% root text
 size. Mobile filter drawers are checked at 320px in both sizes; wider layouts use inline filters.
