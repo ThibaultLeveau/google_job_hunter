@@ -1761,6 +1761,9 @@ tests/test_stack_harness.py --require-database`.
 
 ## Browser checks
 
+The [accessibility audit and keyboard record](docs/accessibility.md) covers the core screens,
+responsive text, focus, contrast and review screenshots retained by Browser CI.
+
 With local PostgreSQL/pgvector running and `TEST_DATABASE_URL` exported, install the locked
 backend/frontend dependencies and run from `frontend/`:
 

@@ -13,7 +13,7 @@ const group = (values = ['']) => ({ id: crypto.randomUUID(), terms: values.map(t
 const normalized = (value: string) => value.normalize('NFKC').trim().replace(/\s+/gu, ' ');
 
 export function SearchLogic({ definition }: { definition: Definition }) {
-  return <div className="search-logic" aria-label="Search logic">
+  return <div className="search-logic" role="group" aria-label="Search logic">
     {definition.groups.map((terms, index) => <div key={index}>
       {index > 0 && <strong className="search-and">AND</strong>}
       <span>Match any of: </span>{terms.map((value, number) => <span key={number}>

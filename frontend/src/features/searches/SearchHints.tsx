@@ -91,7 +91,7 @@ export function SearchHints({ definition, complete, days, changeDays, change, co
             : 'The preview could not be loaded. Your draft is kept.'}</p>
             {!(current.error instanceof ApiError && current.error.status === 422) && <Button tone="secondary" onClick={retry}>Retry preview</Button>}</div>
             : !current?.value ? <p role="status">Preparing query preview…</p>
-              : <><pre tabIndex={0} aria-label="Exact Google query">{current.value.query}</pre>
+              : <><pre role="group" tabIndex={0} aria-label="Exact Google query">{current.value.query}</pre>
                 <h4>Separate provider parameters</h4>
                 {Object.keys(current.value.provider_parameters).length === 0 ? <p>None specified — provider defaults apply.</p>
                   : <dl>{Object.entries(current.value.provider_parameters).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl>}
