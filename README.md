@@ -1919,8 +1919,8 @@ and ordinary `down`; `down --volumes` destroys data and is only for disposable t
 
 This supports one host with POSIX locks and persistent local storage. Replicas on another
 host cannot share these document paths; multi-host scaling requires a separately designed
-storage adapter. Coordinate database and document backups and migration recovery using
-the operations runbook delivered by #72. This issue does not deploy or provision secrets.
+storage adapter. Use the [operations runbook](docs/operations.md) for consistent encrypted
+backup/restore, provider setup, migrations, incident recovery and secret rotation.
 
 `Container quality` builds all targets, checks production startup/health, same-origin routes,
 private volume persistence, graceful shutdown, and image history/static files for a synthetic
