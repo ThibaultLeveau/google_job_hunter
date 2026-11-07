@@ -1,0 +1,98 @@
+name: job-hunter-runtime
+
+x-backend: &backend
+  image: ${COMPOSE_PROJECT_NAME:-job-hunter-runtime}-backend
+  env_file: ${RUNTIME_ENV_FILE:-.env.runtime}
+  environment:
+    JOB_HUNTER_DOCUMENT_ROOT: /private/documents
+    JOB_HUNTER_AI_ENVIRONMENT: production
+    JOB_HUNTER_SEARCH_ENVIRONMENT: production
+  read_only: true
+  tmpfs: ["/tmp:rw,nosuid,noexec,size=128m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  cpus: 1.0
+  mem_limit: 1g
+  stop_grace_period: 90s
+  depends_on:
+    database:
+      condition: service_healthy
+
+services:
+  database:
+    image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:5895949dfcdf308eb0cd31c950c93c14895c77f33fbedfecf1fa511ab1d4bcd2
+    environment:
+      POSTGRES_USER: job_hunter
+      POSTGRES_DB: job_hunter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the runtime env file}
+    volumes: [postgres_data:/var/lib/postgresql]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U job_hunter -d job_hunter]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    cpus: 1.0
+    mem_limit: 1g
+    pids_limit: 128
+    stop_grace_period: 60s
+    restart: unless-stopped
+  migrate:
+    <<: *backend
+    profiles: [tools]
+    command: [migrate]
+    restart: "no"
+  api:
+    <<: *backend
+    build:
+      context: .
+      target: backend
+    command: [api]
+    volumes: [documents:/private/documents]
+    healthcheck:
+      test: [CMD, python, -m, scripts.runtime, api-health]
+      interval: 10s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+  worker:
+    <<: *backend
+    command: [worker]
+    volumes: [documents:/private/documents]
+    cpus: 2.0
+    mem_limit: 2g
+    healthcheck:
+      test: [CMD, python, -m, scripts.runtime, worker-health]
+      interval: 15s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+  web:
+    image: ${COMPOSE_PROJECT_NAME:-job-hunter-runtime}-web
+    build:
+      context: .
+      target: web
+    ports: ["127.0.0.1:${RUNTIME_PORT:-8080}:8080"]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,noexec,size=64m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.5
+    mem_limit: 64m
+    pids_limit: 32
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  documents:

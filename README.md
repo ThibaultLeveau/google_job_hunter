@@ -1868,6 +1868,71 @@ a new path. Live results stay outside commits unless deliberately reviewed. Prom
 model changes require rerunning these checks, reviewing failed labels, and a separately authorized,
 budgeted live comparison when live behavior is being assessed. Never silently relabel a regression.
 
+## Single-host container runtime
+
+[Dockerfile](Dockerfile) pins Python, uv, Node and nginx bases by digest and installs the
+existing lockfiles. The `backend` target contains runtime dependencies and migrations;
+`web` contains the compiled frontend and [same-origin proxy](deploy/nginx.conf).
+No build argument accepts credentials. The allowlisted build context excludes environment
+files, private data, local dependencies and generated reports. API/worker run as UID/GID
+10001; nginx runs as 101. Only API/worker mount the mode-0700 private document volume.
+
+Use Docker Engine and Compose v2 with [compose.runtime.yaml](compose.runtime.yaml), separately
+from the development database in `compose.yaml`. From the repository root:
+
+```bash
+cp .env.example .env.runtime
+chmod 600 .env.runtime
+# Edit all placeholders before continuing; never commit this file.
+docker compose --env-file .env.runtime -f compose.runtime.yaml build api web
+docker compose --env-file .env.runtime -f compose.runtime.yaml up -d --wait database
+docker compose --env-file .env.runtime -f compose.runtime.yaml run --rm migrate
+docker compose --env-file .env.runtime -f compose.runtime.yaml up -d --wait api worker web
+docker compose --env-file .env.runtime -f compose.runtime.yaml stop web api worker database
+```
+
+Set the PostgreSQL password and the same URL-encoded password in its DSN, the canonical
+HTTPS origin/trusted hostname, SMTP settings and a Fernet mail key. Keep `127.0.0.1` in
+trusted hosts for internal health checks. See the existing provider sections for Google,
+SerpApi, AI models and budgets. Disabled search/AI providers permit startup without paid
+calls; SMTP delivery still requires valid operator settings. Production commands always
+reject development/test modes and fixture providers. Settings enter backend containers
+at runtime through the private env file; Docker administrators can inspect that environment.
+Never publish `docker compose config` output containing resolved settings.
+
+The proxy binds only `127.0.0.1:8080` (`RUNTIME_PORT` overrides the port). Terminate HTTPS
+at a host reverse proxy, preserve the original Host, and forward to that loopback port.
+HTTP alone is insufficient for browser sessions: cookies remain Secure. API and PostgreSQL
+have no published ports. Forwarded client headers are not trusted. Proxy access logs and
+API access logs are disabled to avoid private URL/token logging; process status and backend
+structured operational logs remain available. Frontend deep links fall back to index.html.
+
+Run migrations exactly once, serially, before starting upgraded API/worker processes; they
+never migrate themselves. Their startup and container health probes require the exact
+Alembic head. `/api/health/live` measures API process liveness; `/api/health/ready` checks
+database connectivity. The worker probe checks its PID-1 process and database schema; it
+does not establish task throughput or provider availability. Monitor queue age separately.
+SIGTERM reaches the processes directly; bounded shutdown drains active work, with durable
+lease recovery after forced termination. Compose bounds memory, CPU, PIDs and temporary
+storage and makes application root filesystems read-only. Named volumes survive restart
+and ordinary `down`; `down --volumes` destroys data and is only for disposable tests.
+
+This supports one host with POSIX locks and persistent local storage. Replicas on another
+host cannot share these document paths; multi-host scaling requires a separately designed
+storage adapter. Coordinate database and document backups and migration recovery using
+the operations runbook delivered by #72. This issue does not deploy or provision secrets.
+
+`Container quality` builds all targets, checks production startup/health, same-origin routes,
+private volume persistence, graceful shutdown, and image history/static files for a synthetic
+credential canary. It then runs the existing real PostgreSQL/API/worker pipeline scenarios
+in the explicitly separate `fixture-test` image, whose adapters deny external traffic.
+The test creates a uniquely named Compose project and removes only its own volumes/images.
+Run the same check locally (Docker required; no real credentials or paid calls):
+
+```bash
+RUN_CONTAINER_TESTS=1 uv run --directory backend --locked pytest tests/test_runtime.py -k container_runtime -q --tb=short
+```
+
 ## Contribution workflow
 
 Start from fetched current `main` after the selected issue's explicit prerequisites merge.
