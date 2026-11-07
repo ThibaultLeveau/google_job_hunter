@@ -1829,6 +1829,45 @@ only application assets; the harness and orchestration remain outside the browse
 See [Playwright's test practices](https://playwright.dev/docs/best-practices) and
 [web-server lifecycle](https://playwright.dev/docs/test-webserver) for the runner contracts.
 
+## Synthetic AI regression evaluations
+
+From `backend/`, run `uv run --locked python -m scripts.evaluate_ai` for the six versioned
+cases in `evaluations/synthetic-v1.json`, or `uv run --locked pytest tests/test_ai_evaluations.py`
+for the ordinary CI regressions and deliberate failures. No credentials or network are needed.
+Fixtures and independent labels cover multilingual resumes, uncertain dates, duplicate facts,
+prompt injection, missing metadata, complete application requirements and matching unknowns.
+These checks measure deterministic application behavior; they do not measure live model quality.
+
+Every applicable metric must equal 1.0; otherwise the command exits 1. Schema validity and evidence
+support use the production schemas/validators. Mandatory-item recall compares unique labelled
+clauses with retained/extracted clauses; deduplication checks expected counts and retained evidence.
+Labels check facts, ambiguity, priorities and unknowns. The rubric checks percentages, coverage,
+counts and each weighted component independently of generated rationale prose. Fabricated citations,
+omitted mandatory requirements and an incorrect score deliberately fail the test evaluator.
+Matching uses complete fixed source evidence and accepted facts with the production prompt,
+validator and aggregation; retrieval and database publication are covered by the real-stack journeys.
+
+Live evaluation is a separate manual opt-in. Configure the server-side `JOB_HUNTER_AI_` OpenAI
+settings described above, verify the selected model's current input/output USD-per-million-token
+rates, and supply them explicitly. For example, with both rate variables set by the operator:
+
+```bash
+uv run --locked python -m scripts.evaluate_ai --live --allow-paid \
+  --max-requests 12 --max-cost-usd 0.25 \
+  --input-usd-per-million "${MODEL_INPUT_USD_PER_MILLION:?Set the current input rate}" \
+  --output-usd-per-million "${MODEL_OUTPUT_USD_PER_MILLION:?Set the current output rate}"
+```
+
+Live mode requires all caps, permits at most 32 requests and USD 5, and reserves worst-case bounded
+input/output token cost before every attempt, including schema repair. Reservations are never refunded;
+failure or unknown usage cannot free capacity. Cost estimates depend on the supplied rates. Tests use
+a fake adapter to prove exhaustion prevents calls; normal CI never runs a paid provider.
+Reports contain dataset version/hash, model, prompt/schema versions/hashes, metrics and call accounting.
+They default to ignored `backend/reports/evaluations/` files with private permissions; `--output` requires
+a new path. Live results stay outside commits unless deliberately reviewed. Prompt, schema, rubric or
+model changes require rerunning these checks, reviewing failed labels, and a separately authorized,
+budgeted live comparison when live behavior is being assessed. Never silently relabel a regression.
+
 ## Contribution workflow
 
 Start from fetched current `main` after the selected issue's explicit prerequisites merge.
