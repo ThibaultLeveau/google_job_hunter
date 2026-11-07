@@ -1,15 +1,14 @@
 # Google Job Hunter
 
-Google Job Hunter is a planned private job-research application: review profile facts from documents,
+Google Job Hunter is a private job-research application: review profile facts from documents,
 run grouped Google searches, and inspect public job evidence and private profile matches.
 
-**Current state:** the backend bootstrap provides a typed FastAPI app factory and a credential-free
-liveness endpoint. Architecture and contribution contracts are established.
-The React frontend provides a responsive session-aware shell, guarded routes and local API proxy.
-Backend and frontend GitHub Actions checks enforce lint, strict types and coverage.
-PostgreSQL/pgvector, explicit transaction sessions and Alembic schema setup are available.
-Backend CI runs migrations and isolated real-database tests. The durable task store is available;
-worker execution, heartbeat/recovery and automatic backoff remain planned for #11.
+**Start here:** [Quickstart: configuration, installation and local or container runs](docs/quickstart.md).
+
+The API, worker, React interface and PostgreSQL/pgvector pipeline are implemented, with
+authentication, profile review, searches, job evidence, private matches and account data controls.
+CI covers backend, frontend, browser journeys, containers and recovery. Live mail and optional
+Google/search/AI providers require configuration; see the quickstart for both startup paths.
 
 - Read [the architecture](docs/architecture.md) for product scope, ownership, recovery and operator settings.
 - Read [the contribution rules](AGENTS.md) before implementation.
