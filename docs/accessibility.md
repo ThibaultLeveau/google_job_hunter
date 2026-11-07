@@ -16,8 +16,10 @@ successful screenshots, the HTML report and axe results. Download them from the 
 The audit uses [axe with Playwright](https://playwright.dev/docs/accessibility-testing), including
 WCAG 2.0/2.1/2.2 A/AA tags, with no disabled rules or element exclusions. It requires zero reported
 violations, including serious/critical ones. Unexpected incomplete assessments also fail.
-Native-dialog clipping can prevent axe measuring the deletion explanation's background;
-that paragraph's actual computed foreground/background colors are checked separately at 4.5:1.
+Native-dialog background heuristics can leave the deletion explanation or mobile Close filters
+button unmeasured. Both use direct computed foreground/background checks at 4.5:1; the button
+must also be fully in the viewport. CI's captured button was visibly unobscured despite axe's
+partial-overlap report. No other incomplete targets are accepted.
 The JSON attachments retain those incomplete reports for review rather than presenting them as passes.
 
 At widths 320, 768 and 1440 CSS pixels, each covered state is scanned at 100% and 200% root text
