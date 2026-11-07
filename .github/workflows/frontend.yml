@@ -57,6 +57,9 @@ jobs:
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: npm run test:coverage
 
+      - name: Verify coverage and network failure gates
+        run: npm run test:guards
+
       - name: Build production bundle
         run: npm run build
 

@@ -104,8 +104,8 @@ npm run build
 ```
 
 `npm test` runs the component tests without coverage. The shared jsdom setup uses Testing Library,
-user-event and MSW with no default handlers. Tests register only the requests they need through
-`server.use(...)`; handlers and the DOM are reset after each test. Unhandled requests are blocked
+user-event and MSW with baseline handlers for background account/document/job loads. Tests register
+their scenario responses through `server.use(...)`; handlers and the DOM are reset after each test. Unhandled requests are blocked
 and fail teardown even when application code catches the request error. No API keys are needed.
 
 Frontend coverage includes every `src/**/*.ts` and `src/**/*.tsx` module, including unimported files,
@@ -1780,7 +1780,9 @@ queue and database. Playwright starts #66's harness and a local preview proxy,
 waits for readiness, resets private test data before each test and tears down the stack afterward.
 It never reuses a running server. `E2E_PORT` defaults to 4175; simultaneous runs need distinct
 ports. Each run generates a private state path; `E2E_STATE` can specify a new path explicitly.
-No provider credentials, alternate application routes or browser-only API mocks are involved.
+No provider credentials or alternate application routes are involved. Accessibility stress cases
+explicitly transform real responses to exercise long titles and absent metadata; acceptance
+journeys otherwise use the real API.
 
 The five guard probes deliberately fail a direct request and external HTTPS/HTTP redirects, fail after readiness, and supply
 production provider settings. They pass only when the expected failure is reported; the browser
@@ -1935,6 +1937,13 @@ Run the same check locally (Docker required; no real credentials or paid calls):
 ```bash
 RUN_CONTAINER_TESTS=1 uv run --directory backend --locked pytest tests/test_runtime.py -k container_runtime -q --tb=short
 ```
+
+## Release quality gates
+
+The [release checklist and regression budgets](docs/release.md) record coverage exclusions,
+authorization/queue evidence, bounded listings and worker inputs, deliberate failure probes and
+remaining product/provider limitations. `npm run test:guards` verifies the frontend coverage and
+network guards; backend gate probes run in the ordinary pytest suite.
 
 ## Contribution workflow
 

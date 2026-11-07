@@ -1,6 +1,10 @@
 import os
+import socket
+import sys
 from collections.abc import Iterator
+from ipaddress import ip_address
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -13,6 +17,8 @@ from sqlalchemy.engine import make_url
 
 from job_hunter.infrastructure.database import Database
 from job_hunter.settings import Settings
+
+DENIED_NETWORK: list[str] = []
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -30,6 +36,53 @@ def pytest_configure(config: pytest.Config) -> None:
         raise pytest.UsageError(
             "Database tests must run sequentially; omit xdist workers"
         )
+
+    database = make_url(os.environ.get("TEST_DATABASE_URL", "postgresql://localhost"))
+
+    def allowed(host: object, port: object = None) -> bool:
+        if host is None or host in ("localhost", b"localhost"):
+            return True
+        if isinstance(host, bytes):
+            host = host.decode("ascii", errors="replace")
+        if not isinstance(host, str):
+            return False
+        if host == database.host and port in (None, database.port or 5432):
+            return True
+        try:
+            return ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    def audit(event: str, args: tuple[Any, ...]) -> None:
+        if event in {"socket.connect", "socket.sendto", "socket.sendmsg"}:
+            if args[0].family == socket.AF_UNIX or args[1] is None:
+                return
+            permitted = allowed(*args[1][:2])
+        elif event == "socket.getaddrinfo":
+            permitted = allowed(*args[:2])
+        elif event in {"socket.gethostbyname", "socket.gethostbyaddr"}:
+            permitted = allowed(args[0])
+        elif event == "socket.getnameinfo":
+            permitted = allowed(*args[0][:2])
+        else:
+            return
+        if not permitted:
+            DENIED_NETWORK.append(event)
+            raise RuntimeError("Unexpected external test network: " + event)
+
+    sys.addaudithook(audit)
+
+
+@pytest.fixture(autouse=True)
+def no_external_network() -> Iterator[None]:
+    yield
+    denied, DENIED_NETWORK[:] = DENIED_NETWORK[:], []
+    assert not denied, f"Unexpected external test network (even if caught): {denied}"
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    if DENIED_NETWORK:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture(autouse=True)
