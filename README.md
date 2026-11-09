@@ -803,7 +803,7 @@ UTF-8 byte bounds conservatively limit byte-BPE input tokens, including prompt/s
 Embeddings allow at most 16 nonempty inputs, 8000 bytes each, within the aggregate input bound;
 one request returns finite vectors of the configured dimensions. Output tokens are capped by the request.
 Every call has a request timeout and wall deadline; cancellation aborts and awaits transport cleanup.
-SDK retries are zero. Chat can repair schema failures once with a fixed instruction, without replaying
+SDK retries are zero. Chat can repair schema or opted-in feature-validation failures once with a fixed instruction, without replaying
 invalid output; provider failures/refusals are terminal. Callers must not add automatic task retries
 around these calls; later explicit retries require fresh budget reservations.
 
@@ -822,6 +822,7 @@ Each field retains uncertainty, explicit nulls and exact Unicode spans/quotes va
 and preserved text. Extraction v2 resolves incorrect model offsets using exact quotes in the declared
 source window: unique matches can be relocated, while repeated skill quotes retain all occurrences.
 Grouped skill-name fields become separate candidates, each subject to full evidence validation.
+Profile evidence checks use the same two-call ceiling as schema repair; invalid evidence is never published.
 Ambiguous employment/project quotes and absent quotes fail. Already valid positions remain unchanged.
 Sentence-final periods followed by whitespace/end are punctuation; partial tokens such as `C`
 in `C++` still fail. Unsupported values fail; source presence does not prove factual truth.

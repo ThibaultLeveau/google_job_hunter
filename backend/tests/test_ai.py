@@ -405,3 +405,35 @@ def test_strict_schema_and_private_repr() -> None:
     assert CANARY not in str(error.value)
     assert CANARY not in repr(Reply(CANARY))
     assert "fixture-key-canary" not in repr(settings())
+
+
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_feature_validation_shares_the_existing_repair_budget(
+    repair_succeeds: bool,
+) -> None:
+    ledger = Ledger()
+    calls = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        value = "supported" if repair_succeeds and calls == 2 else "unsupported"
+        return httpx.Response(200, json=completion(json.dumps({"value": value})))
+
+    def validate(answer: Answer) -> None:
+        if answer.value != "supported":
+            raise ValueError(CANARY)
+
+    ai = service(httpx.MockTransport(respond), ledger)
+    if repair_succeeds:
+        result = ai.extract(PROMPT, "source", Answer, "v1", validate)
+        assert result.value.value == "supported"
+    else:
+        with pytest.raises(AIError, match="^invalid_output$"):
+            ai.extract(PROMPT, "source", Answer, "v1", validate)
+    assert calls == 2 and len(ledger.reserved) == 2
+    assert [r.error for r in ledger.records] == [
+        "invalid_output",
+        None if repair_succeeds else "invalid_output",
+    ]
+    assert CANARY not in repr(ledger.records)

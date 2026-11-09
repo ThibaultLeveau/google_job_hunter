@@ -125,7 +125,7 @@ def test_golden_long_documents_unknowns_and_injection() -> None:
         BytesIO((TEXT + "\n" + "padding\n" * 700).encode()), "text/plain", ParseLimits()
     )
     assert len(stage('{"candidates":[]}').execute(long).accounting) > 1
-    with pytest.raises(ValueError, match="supplied window"):
+    with pytest.raises(AIError, match="invalid_output"):
         stage(golden(parsed).model_dump_json()).execute(long)
     huge = parse(BytesIO(b"x" * 300000), "text/plain", ParseLimits())
     with pytest.raises(ValueError, match="window limit"):
@@ -484,5 +484,5 @@ def test_grouped_skill_names_become_separate_validated_candidates() -> None:
     bad = grouped.model_copy(
         update={"fields": [first.fields[0].model_copy(update={"name": "company"})]}
     )
-    with pytest.raises(ValueError, match="Invalid proposal fields"):
+    with pytest.raises(AIError, match="invalid_output"):
         stage(Batch(candidates=[bad]).model_dump_json()).execute(parsed)
