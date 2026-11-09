@@ -125,7 +125,7 @@ def test_golden_long_documents_unknowns_and_injection() -> None:
         BytesIO((TEXT + "\n" + "padding\n" * 700).encode()), "text/plain", ParseLimits()
     )
     assert len(stage('{"candidates":[]}').execute(long).accounting) > 1
-    with pytest.raises(ValueError, match="outside supplied window"):
+    with pytest.raises(ValueError, match="supplied window"):
         stage(golden(parsed).model_dump_json()).execute(long)
     huge = parse(BytesIO(b"x" * 300000), "text/plain", ParseLimits())
     with pytest.raises(ValueError, match="window limit"):
@@ -307,3 +307,182 @@ def test_atomic_handoff_proposals_fencing_and_private_reads(
         client.cookies.set("job_hunter_session", "a" * 43)
         assert client.get(url).json()["count"] == 4
         assert client.get(url + "?offset=100").json()["items"] == []
+
+
+@pytest.mark.parametrize("kind", ["skill", "project"])
+def test_extraction_resolves_unique_unicode_quote_offsets(kind: str) -> None:
+    parsed = parse(
+        BytesIO("Résumé\nDéveloppeur Python".encode()), "text/plain", ParseLimits()
+    )
+    row = candidate(parsed, kind, {"name": ("Python", "Python", 0)})
+    field = next(field for field in row.fields if field.name == "name")
+    span = field.evidence[0]
+    expected = span.model_copy()
+    row = row.model_copy(
+        update={
+            "fields": [
+                field.model_copy(
+                    update={
+                        "evidence": [span.model_copy(update={"start": 0, "end": 6})]
+                    }
+                )
+                if field.name == "name"
+                else field
+                for field in row.fields
+            ]
+        }
+    )
+    result = stage(Batch(candidates=[row]).model_dump_json()).execute(parsed)
+    resolved = next(
+        field for field in result.candidates[0].fields if field.name == "name"
+    )
+    assert resolved.evidence == [expected]
+    validate_evidence(result.candidates[0], list(parsed.segments))
+    assert (
+        next(field for field in row.fields if field.name == "name").evidence[0].start
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "mode", ["ambiguous", "absent", "locator", "outside", "fabricated", "partial"]
+)
+def test_evidence_resolution_preserves_rejection(mode: str) -> None:
+    from job_hunter.domain.extraction import locate_evidence
+
+    parsed = parse(BytesIO(b"Python Python C++"), "text/plain", ParseLimits())
+    row = candidate(parsed, "project", {"name": ("Python", "Python", 0)})
+    data = row.model_dump()
+    field = next(field for field in data["fields"] if field["name"] == "name")
+    span = field["evidence"][0]
+    span.update(start=999, end=1005)
+    window = list(parsed.segments)
+    if mode == "absent":
+        span["quote"] = "Rust"
+    elif mode == "locator":
+        span["locator"] = "page:99"
+    elif mode == "outside":
+        window = []
+    elif mode == "fabricated":
+        span["quote"] = "C++"
+        field["value"] = "Rust"
+    elif mode == "partial":
+        span["quote"] = "C"
+        field["value"] = "C"
+    with pytest.raises(ValueError):
+        resolved = locate_evidence(Candidate.model_validate(data), window)
+        validate_evidence(resolved, list(parsed.segments))
+
+
+def test_repeated_quotes_and_overlapping_windows() -> None:
+    from job_hunter.domain.extraction import locate_evidence
+
+    parsed = parse(BytesIO(b"Python Python"), "text/plain", ParseLimits())
+    row = candidate(parsed, "skill", {"name": ("Python", "Python", 7)})
+    assert locate_evidence(row, list(parsed.segments)) == row
+    parsed = parse(BytesIO(b"Python"), "text/plain", ParseLimits())
+    row = candidate(parsed, "skill", {"name": ("Python", "Python", 0)})
+    field = row.fields[0]
+    row = row.model_copy(
+        update={
+            "fields": [
+                field.model_copy(
+                    update={
+                        "evidence": [
+                            field.evidence[0].model_copy(
+                                update={"start": 99, "end": 105}
+                            )
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    resolved = locate_evidence(row, list(parsed.segments) * 2)
+    assert resolved.fields[0].evidence[0].start == 0
+
+
+def test_repeated_skill_offsets_retain_all_exact_occurrences() -> None:
+    parsed = parse(BytesIO(b"Python Python"), "text/plain", ParseLimits())
+    row = candidate(parsed, "skill", {"name": ("Python", "Python", 0)})
+    field = row.fields[0]
+    row = row.model_copy(
+        update={
+            "fields": [
+                field.model_copy(
+                    update={
+                        "evidence": [
+                            field.evidence[0].model_copy(
+                                update={"start": 99, "end": 105}
+                            )
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    result = stage(Batch(candidates=[row]).model_dump_json()).execute(parsed)
+    assert [span.start for span in result.candidates[0].fields[0].evidence] == [0, 7]
+    validate_evidence(result.candidates[0], list(parsed.segments))
+
+
+def test_skill_resolution_excludes_substrings_and_bounds_evidence() -> None:
+    from job_hunter.domain.extraction import locate_evidence
+
+    for text, expected in [("Python Python3", [0]), ("Python " * 129, None)]:
+        parsed = parse(BytesIO(text.encode()), "text/plain", ParseLimits())
+        row = candidate(parsed, "skill", {"name": ("Python", "Python", 0)})
+        data = row.model_dump()
+        data["fields"][0]["evidence"][0].update(start=99999, end=100005)
+        row = Candidate.model_validate(data)
+        if expected is None:
+            with pytest.raises(ValueError):
+                locate_evidence(row, list(parsed.segments))
+        else:
+            resolved = locate_evidence(row, list(parsed.segments))
+            assert [s.start for s in resolved.fields[0].evidence] == expected
+            validate_evidence(resolved, list(parsed.segments))
+
+
+@pytest.mark.parametrize(
+    "text,value,valid",
+    [
+        ("Python.", "Python", True),
+        ("Python. Next", "Python", True),
+        ("Node.js", "Node", False),
+        (".NET", "NET", False),
+        ("C++", "C", False),
+        ("Python3", "Python", False),
+        ("Node.js.", "Node.js", True),
+    ],
+)
+def test_sentence_period_is_not_a_partial_token(
+    text: str, value: str, valid: bool
+) -> None:
+    parsed = parse(BytesIO(text.encode()), "text/plain", ParseLimits())
+    row = candidate(parsed, "skill", {"name": (value, value, 0)})
+    if valid:
+        validate_evidence(row, list(parsed.segments))
+        assert (
+            stage(Batch(candidates=[row]).model_dump_json()).execute(parsed).candidates
+        )
+    else:
+        with pytest.raises(ValueError, match="partial token"):
+            validate_evidence(row, list(parsed.segments))
+
+
+def test_grouped_skill_names_become_separate_validated_candidates() -> None:
+    parsed = parse(BytesIO(b"Python Rust"), "text/plain", ParseLimits())
+    first = candidate(parsed, "skill", {"name": ("Python", "Python", 0)})
+    second = candidate(parsed, "skill", {"name": ("Rust", "Rust", 0)})
+    grouped = Candidate(kind="skill", fields=first.fields + second.fields)
+    result = stage(Batch(candidates=[grouped]).model_dump_json()).execute(parsed)
+    assert len(result.candidates) == 2
+    assert {row.fields[0].value for row in result.candidates} == {"Python", "Rust"}
+    for row in result.candidates:
+        validate_evidence(row, list(parsed.segments))
+    bad = grouped.model_copy(
+        update={"fields": [first.fields[0].model_copy(update={"name": "company"})]}
+    )
+    with pytest.raises(ValueError, match="Invalid proposal fields"):
+        stage(Batch(candidates=[bad]).model_dump_json()).execute(parsed)

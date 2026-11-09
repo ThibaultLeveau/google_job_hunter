@@ -819,7 +819,12 @@ is narrowly filtered. Other warnings remain errors, and no maintained code is ex
 Verified-owner `GET /api/v1/documents/{id}/proposals?offset=0` returns status, artifact/source version,
 language, count and 100 proposals/page. Accepted profile facts never change.
 Each field retains uncertainty, explicit nulls and exact Unicode spans/quotes validated against its window
-and preserved text. Partial tokens/unsupported values fail; source presence does not prove factual truth.
+and preserved text. Extraction v2 resolves incorrect model offsets using exact quotes in the declared
+source window: unique matches can be relocated, while repeated skill quotes retain all occurrences.
+Grouped skill-name fields become separate candidates, each subject to full evidence validation.
+Ambiguous employment/project quotes and absent quotes fail. Already valid positions remain unchanged.
+Sentence-final periods followed by whitespace/end are punctuation; partial tokens such as `C`
+in `C++` still fail. Unsupported values fail; source presence does not prove factual truth.
 Only exact normalized skills merge evidence; similarly named employment/projects remain separate.
 Windows use 500-character pieces/100-character overlap and about 4 KiB; excess over 64 windows,
 128 calls including repair or 512 candidates fails. One task attempt prevents nested paid retries.

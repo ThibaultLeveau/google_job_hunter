@@ -43,6 +43,49 @@ class Candidate(ProfileValue):
     fields: list[ProposedField] = Field(min_length=1, max_length=7)
 
 
+def complete_token(text: str, start: int, end: int) -> bool:
+    before, after = text[max(0, start - 1) : start], text[end : end + 1]
+    if after == "." and (end + 1 == len(text) or text[end + 1].isspace()):
+        after = ""
+    return re.search(r"[\w+#.-]", before + after) is None
+
+
+def locate_evidence(candidate: Candidate, window: list[TextSegment]) -> Candidate:
+    fields = []
+    for field in candidate.fields:
+        evidence = []
+        for span in field.evidence:
+            parts = [part for part in window if part.locator == span.locator]
+            if any(
+                part.start <= span.start < span.end <= part.end
+                and part.text[span.start - part.start : span.end - part.start]
+                == span.quote
+                for part in parts
+            ):
+                evidence.append(span)
+                continue
+            positions: set[int] = set()
+            for part in parts:
+                offset = part.text.find(span.quote)
+                while offset != -1:
+                    end = offset + len(span.quote)
+                    if field.name == "description" or complete_token(
+                        part.text, offset, end
+                    ):
+                        positions.add(part.start + offset)
+                    offset = part.text.find(span.quote, offset + 1)
+            if not positions or (len(positions) != 1 and candidate.kind != "skill"):
+                raise ValueError("Evidence has no unique match in the supplied window.")
+            evidence.extend(
+                span.model_copy(update={"start": start, "end": start + len(span.quote)})
+                for start in sorted(positions)
+            )
+        fields.append(
+            ProposedField.model_validate({**field.model_dump(), "evidence": evidence})
+        )
+    return candidate.model_copy(update={"fields": fields})
+
+
 def validate_evidence(candidate: Candidate, segments: list[TextSegment]) -> None:
     if not any(field.value is not None for field in candidate.fields):
         raise ValueError("A proposal needs a supported value.")
@@ -82,11 +125,9 @@ def validate_evidence(candidate: Candidate, segments: list[TextSegment]) -> None
                 ) != normalized(span.quote):
                     raise ValueError("Proposed values must be extractive.")
                 start, end = span.start - segment.start, span.end - segment.start
-                adjacent = (
-                    segment.text[max(0, start - 1) : start]
-                    + segment.text[end : end + 1]
-                )
-                if field.name != "description" and re.search(r"[\w+#.-]", adjacent):
+                if field.name != "description" and not complete_token(
+                    segment.text, start, end
+                ):
                     raise ValueError("A partial token is not a supported fact.")
 
 
