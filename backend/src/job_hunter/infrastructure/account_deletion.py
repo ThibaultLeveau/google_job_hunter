@@ -25,7 +25,11 @@ from job_hunter.infrastructure.budgets import (
     BudgetReservationRecord,
 )
 from job_hunter.infrastructure.database import Database
-from job_hunter.infrastructure.documents import DocumentRecord, ParsedDocumentRecord
+from job_hunter.infrastructure.documents import (
+    DocumentDeletionRecord,
+    DocumentRecord,
+    ParsedDocumentRecord,
+)
 from job_hunter.infrastructure.match_events import EVALUATE, SCAN, MatchScanRecord
 from job_hunter.infrastructure.matches import MatchIdentityRecord
 from job_hunter.infrastructure.profiles import ProfileRecord
@@ -38,7 +42,15 @@ CLEANUP = "account_cleanup"
 
 
 def personal_tasks(owner: UUID) -> Select[TaskRecord]:
-    documents = select(DocumentRecord.id).where(DocumentRecord.owner_id == owner)
+    documents = (
+        select(DocumentRecord.id)
+        .where(DocumentRecord.owner_id == owner)
+        .union(
+            select(DocumentDeletionRecord.document_id).where(
+                DocumentDeletionRecord.owner_id == owner
+            )
+        )
+    )
     parsed = select(ParsedDocumentRecord.id).where(
         ParsedDocumentRecord.document_id.in_(documents)
     )

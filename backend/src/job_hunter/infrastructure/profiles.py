@@ -133,9 +133,7 @@ class UnavailableSourceRecord(Base):
     fact_id: Mapped[UUID] = mapped_column(
         ForeignKey("profile_facts.id", ondelete="CASCADE"), primary_key=True
     )
-    document_id: Mapped[UUID] = mapped_column(
-        ForeignKey("documents.id"), primary_key=True
-    )
+    document_id: Mapped[UUID] = mapped_column(primary_key=True)
 
 
 def detach_document(session: Session, document: DocumentRecord) -> None:

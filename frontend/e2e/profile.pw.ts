@@ -71,6 +71,35 @@ test('process a resume, review and edit facts, and reuse identical content acros
   expect(listed.status()).toBe(200);
   expect((await listed.json() as Document[]).map(item => item.id)).toEqual([document.id]);
   expect(await control('dedup', '--owner', user.id)).toEqual(before);
+
+  await page.getByRole('button', { name: 'Delete synthetic-resume.txt', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cancel deletion', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Confirm deletion', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Deleted', { exact: true })).toBeVisible({ timeout: 30000 });
+  const removed = await control('dedup', '--owner', user.id) as DedupState;
+  expect(removed.documents).toEqual([]);
+  expect(removed.parsed).toEqual([]);
+  expect(removed.extractions).toEqual([]);
+  expect(removed.proposals).toEqual([]);
+  expect(removed.stored_files).toBe(0);
+  expect(removed.facts).toEqual(before.facts);
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await test.info().attach(`document-deleted-${String(viewport.width)}`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
+  }
+  await page.getByRole('button', { name: 'Dismiss deleted document', exact: true }).click();
+  const replacement = page.waitForResponse(result => result.url().endsWith('/api/v1/documents') && result.request().method() === 'POST');
+  await uploadResume(page);
+  const reuploaded = await replacement;
+  expect(reuploaded.status()).toBe(201);
+  const newDocument = await reuploaded.json() as Document;
+  expect(newDocument.id).not.toBe(document.id);
+  const after = await control('dedup', '--owner', user.id) as DedupState;
+  expect(after.documents).toEqual([newDocument.id]);
+  expect(after.stored_files).toBe(1);
+  expect(after.facts).toEqual(before.facts);
 });
 
 test('stale review keeps selections and succeeds after explicit reload', async ({ page, context, stack }) => {
