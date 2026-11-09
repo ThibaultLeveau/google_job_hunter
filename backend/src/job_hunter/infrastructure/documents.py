@@ -91,8 +91,9 @@ class DocumentRecord(Base):
 class DocumentDeletionRecord(Base):
     __tablename__ = "document_deletions"
     __table_args__ = (CheckConstraint("step > 0", name="ck_document_deletion_step"),)
-    document_id: Mapped[UUID] = mapped_column(
-        ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    document_id: Mapped[UUID] = mapped_column(primary_key=True)
+    owner_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     step: Mapped[int]
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -629,9 +630,10 @@ class PostgresDocuments(Documents):
     def status(self, owner: UUID, document: UUID) -> Document | DeletionState:
         with self.database.transaction() as session:
             phase = session.scalar(
-                select(DocumentDeletionRecord)
-                .join(DocumentRecord)
-                .where(DocumentRecord.id == document, DocumentRecord.owner_id == owner)
+                select(DocumentDeletionRecord).where(
+                    DocumentDeletionRecord.document_id == document,
+                    DocumentDeletionRecord.owner_id == owner,
+                )
             )
             if phase is not None:
                 return self.deletion_state(session, phase)
@@ -642,10 +644,28 @@ class PostgresDocuments(Documents):
         from job_hunter.infrastructure.profiles import detach_document
 
         with self.database.transaction() as session:
+            completed = session.scalar(
+                select(DocumentDeletionRecord).where(
+                    DocumentDeletionRecord.document_id == document,
+                    DocumentDeletionRecord.owner_id == owner,
+                    DocumentDeletionRecord.completed_at.is_not(None),
+                )
+            )
+            if completed is not None:
+                if live_user(session, owner) is None:
+                    raise DomainError("not_found")
+                return self.deletion_state(session, completed)
             if (
                 session.scalar(
-                    select(DocumentRecord.id).where(
+                    select(DocumentRecord.id)
+                    .where(
                         DocumentRecord.id == document, DocumentRecord.owner_id == owner
+                    )
+                    .union(
+                        select(DocumentDeletionRecord.document_id).where(
+                            DocumentDeletionRecord.document_id == document,
+                            DocumentDeletionRecord.owner_id == owner,
+                        )
                     )
                 )
                 is None
@@ -692,15 +712,21 @@ class PostgresDocuments(Documents):
                 select(DocumentRecord)
                 .where(DocumentRecord.id == document, DocumentRecord.owner_id == owner)
                 .with_for_update()
-            ).one()
+            ).one_or_none()
             if live_user(session, owner) is None:
                 raise DomainError("not_found")
             phase = session.get(DocumentDeletionRecord, document)
+            if row is None:
+                if phase is None or phase.owner_id != owner:
+                    raise DomainError("not_found")
+                return self.deletion_state(session, phase)
             now = self.now()
             if phase is None:
                 row.deleted_at = row.deleted_at or now
                 detach_document(session, row)
-                phase = DocumentDeletionRecord(document_id=document, step=1)
+                phase = DocumentDeletionRecord(
+                    document_id=document, owner_id=owner, step=1
+                )
                 session.add(phase)
                 for task in parse_tasks + extraction_tasks:
                     if task.status != "succeeded":
@@ -745,7 +771,10 @@ class DocumentCleanup:
             with self.database.transaction() as session:
                 key = session.scalar(
                     select(DocumentRecord.storage_key)
-                    .join(DocumentDeletionRecord)
+                    .join(
+                        DocumentDeletionRecord,
+                        DocumentDeletionRecord.document_id == DocumentRecord.id,
+                    )
                     .where(
                         DocumentRecord.id == task.payload_ref,
                         DocumentRecord.id == task.key.subject_id,
@@ -777,7 +806,9 @@ class DocumentCleanup:
             return
         phase = session.scalar(
             select(DocumentDeletionRecord)
-            .join(DocumentRecord)
+            .join(
+                DocumentRecord, DocumentRecord.id == DocumentDeletionRecord.document_id
+            )
             .where(
                 DocumentRecord.id == task.payload_ref,
                 DocumentRecord.id == task.key.subject_id,
@@ -818,6 +849,9 @@ class DocumentCleanup:
             )
         if session.scalar(parsed.limit(1)) is None:
             phase.completed_at = now
+            session.execute(
+                delete(DocumentRecord).where(DocumentRecord.id == task.payload_ref)
+            )
         else:
             phase.step += 1
             PostgresTaskQueue(session).enqueue(

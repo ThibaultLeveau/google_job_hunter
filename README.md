@@ -732,8 +732,8 @@ Set `JOB_HUNTER_DOCUMENT_ROOT` to an absolute local-volume directory outside the
 API/worker service account only; files use 0600. Unconfigured document storage returns 503 after authentication.
 `JOB_HUNTER_DOCUMENT_MAX_BYTES` defaults to 10485760 (range 1–52428800), `QUOTA_BYTES` to 104857600
 (range 1–1073741824), and `QUOTA_COUNT` to 100 (range 1–1000), all with the same document prefix.
-Errors: 60-second timeout 408, oversize 413, invalid content 415, quota/tombstone 409, storage failure 503.
-Quotas count committed documents and tombstones; checks serialize per owner. Temporary use is bounded per request.
+Errors: 60-second timeout 408, oversize 413, invalid content 415, quota/pending deletion 409, storage failure 503.
+Quotas count committed documents until cleanup completes; checks serialize per owner. Temporary use is bounded per request.
 Document creation and `document_parse` enqueue commit together; the configured worker consumes these tasks.
 Use retention maintenance above for checkpointed scheduling on a filesystem with working POSIX locks.
 The legacy `uv run --directory backend --locked python -m job_hunter.infrastructure.documents` command
@@ -754,8 +754,12 @@ Completed steps and the next task commit together. Missing files succeed; direct
 Storage/database failures retry safely, including restart after unlink but before database commit.
 After five failed attempts, `error` is `cleanup_failed`; repeating DELETE resumes the failed step.
 The owner-scoped `PostgresDocuments.delete` operation is reusable by later account deletion.
-Minimal tombstone/task metadata and text-free evidence markers remain. Existing tombstones still count
-toward quotas and prevent identical reuploads; account deletion and quota reclamation are outside #30.
+After cleanup, the document row is removed, including filename, hash, size and storage key.
+This releases count/byte quota and permits identical re-upload with a new document ID and storage key.
+Only an owner-scoped operation receipt (document/owner IDs, step and completion time), task metadata
+and text-free accepted-fact source markers remain for status, retries and provenance. Account deletion
+removes these receipts too. Migration `0033_document_removal` also removes previously completed
+document tombstones. Downgrading cannot recover erased metadata and removes orphan receipts/markers.
 
 ### Bounded document parsing
 

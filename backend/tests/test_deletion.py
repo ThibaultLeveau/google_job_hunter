@@ -6,9 +6,11 @@ from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from test_extraction import TEXT, golden, stage
@@ -18,12 +20,19 @@ from test_review import batch, seed
 
 from job_hunter.app import create_app
 from job_hunter.application.documents import DeletionState, DocumentUploads
-from job_hunter.application.sessions import csrf_token
+from job_hunter.application.sessions import csrf_token, token_hash
 from job_hunter.application.worker import RetryableTaskError
 from job_hunter.domain.documents import ParseResult
+from job_hunter.domain.errors import DomainError
 from job_hunter.domain.profiles import Skill
 from job_hunter.domain.review import ReviewItem
 from job_hunter.domain.tasks import NewTask, StaleLease, Task, TaskError
+from job_hunter.infrastructure.account_deletion import (
+    CLEANUP,
+    AccountCleanup,
+    PostgresAccountDeletion,
+    personal_tasks,
+)
 from job_hunter.infrastructure.database import Database
 from job_hunter.infrastructure.documents import (
     DocumentCleanup,
@@ -125,9 +134,18 @@ def test_owner_api_deletion_keeps_facts_and_removes_all_private_artifacts(
         assert client.get(path).json()["status"] == "deleted"
         assert client.delete(path, headers=HEADERS).status_code == 200
         assert client.get("/api/v1/profile").json() == profile
+        client.cookies.set("job_hunter_session", "b" * 43)
+        assert client.get(path).status_code == 404
+        assert (
+            client.delete(
+                path, headers={"Origin": ORIGIN, "X-CSRF-Token": csrf_token("b" * 43)}
+            ).status_code
+            == 404
+        )
     assert not storage.path(key).exists()
     with isolated_database.transaction() as session:
         for table in (
+            DocumentRecord,
             ParsedDocumentRecord,
             ExtractionRecord,
             ProposalRecord,
@@ -136,6 +154,122 @@ def test_owner_api_deletion_keeps_facts_and_removes_all_private_artifacts(
             assert session.scalar(select(func.count()).select_from(table)) == 0
         assert session.scalar(select(func.count()).select_from(ProfileFactRecord)) == 1
     assert records.delete(owners[0], document).status == "deleted"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("quota", ["count", "bytes"])
+def test_completed_deletion_releases_quota_and_allows_identical_reupload(
+    isolated_database: Database, owners: tuple[UUID, UUID], tmp_path: Path, quota: str
+) -> None:
+    records, storage, store = services(isolated_database, tmp_path)
+    records.settings = StorageSettings(
+        quota_count=1 if quota == "count" else 100,
+        quota_bytes=len(TEXT.encode()) if quota == "bytes" else 100000,
+    )
+    uploads = DocumentUploads(records, storage, 10000)
+
+    def upload(owner: UUID) -> UUID:
+        with uploads.receive("resume.txt", "text/plain") as pending:
+            pending.write(TEXT.encode())
+            document, created = uploads.finish(owner, pending)
+            assert created
+            return document.id
+
+    first, other = upload(owners[0]), upload(owners[1])
+    records.delete(owners[0], first)
+    with pytest.raises(DomainError, match="conflict"):
+        upload(owners[0])
+    task = finish(store)
+    second = upload(owners[0])
+    assert second != first
+    assert records.get(owners[1], other)[0].id == other
+    assert records.delete(owners[0], first).status == "deleted"
+    assert store.handlers["document_cleanup"].execute(task) is False
+    with pytest.raises(StaleLease):
+        store.publish(task, True, NOW)
+    assert records.get(owners[0], second)[0].id == second
+    assert len(list(storage.root.glob("*.blob"))) == 2
+    with isolated_database.transaction() as session:
+        assert session.get(DocumentRecord, first) is None
+        receipt = session.get(DocumentDeletionRecord, first)
+        assert receipt is not None and receipt.owner_id == owners[0]
+
+
+@pytest.mark.integration
+def test_migration_removes_legacy_completed_documents_but_keeps_pending_and_facts(
+    isolated_database: Database, owners: tuple[UUID, UUID], tmp_path: Path
+) -> None:
+    document, ids = seed(isolated_database, owners[0], tmp_path)
+    pending, _ = seed(isolated_database, owners[0], tmp_path)
+    other, _ = seed(isolated_database, owners[1], tmp_path)
+    profiles = PostgresProfiles(isolated_database, lambda: NOW)
+    profiles.review(
+        owners[0], batch(0, ReviewItem(proposal_id=ids["Python"], action="accept"))
+    )
+    records, _, store = services(isolated_database, tmp_path)
+    records.delete(owners[0], document)
+    records.delete(owners[0], pending)
+    before = profiles.read(owners[0])
+    config = Config(toml_file=Path(__file__).resolve().parents[1] / "pyproject.toml")
+    command.downgrade(config, "0032_job_retries")
+    with isolated_database.transaction() as session:
+        session.execute(
+            text("DELETE FROM parsed_documents WHERE document_id = :id"),
+            {"id": document},
+        )
+        session.execute(
+            text(
+                "UPDATE document_deletions SET completed_at = :now "
+                "WHERE document_id = :id"
+            ),
+            {"id": document, "now": NOW},
+        )
+    command.upgrade(config, "head")
+    with isolated_database.transaction() as session:
+        assert session.get(DocumentRecord, document) is None
+        assert session.get(DocumentRecord, pending) is not None
+        assert session.get(DocumentRecord, other) is not None
+    assert records.status(owners[0], document).status == "deleted"
+    assert records.status(owners[0], pending).status == "deleting"
+    assert profiles.read(owners[0]).facts[0].data == before.facts[0].data
+    assert profiles.read(owners[0]).facts[0].unavailable_sources == (document,)
+    # A legacy cleanup delivery is harmless, and the unfinished cleanup still runs.
+    finish(store)
+    finish(store)
+    assert records.status(owners[0], pending).status == "deleted"
+    command.downgrade(config, "0032_job_retries")
+    command.upgrade(config, "head")
+    assert profiles.read(owners[0]).facts[0].data == before.facts[0].data
+
+
+@pytest.mark.integration
+def test_account_cleanup_removes_completed_document_receipts_and_tasks(
+    isolated_database: Database, owners: tuple[UUID, UUID], tmp_path: Path
+) -> None:
+    document, _ = seed(isolated_database, owners[0], tmp_path)
+    records, storage, store = services(isolated_database, tmp_path)
+    records.delete(owners[0], document)
+    finish(store)
+    with isolated_database.transaction() as session:
+        assert session.scalars(personal_tasks(owners[0])).all()
+    PostgresAccountDeletion(isolated_database, lambda: NOW, 300).delete(
+        owners[0], token_hash(TOKEN)
+    )
+    with pytest.raises(DomainError, match="not_found"):
+        records.delete(owners[0], document)
+    cleanup = AccountCleanup(isolated_database, storage, lambda: NOW)
+    queue = PostgresWorkerStore(isolated_database, cleanup.handlers())
+    task = queue.claim((CLEANUP,), NOW, LEASE)
+    assert task is not None
+    queue.publish(task, cleanup.execute(task), NOW)
+    with isolated_database.transaction() as session:
+        assert session.get(DocumentDeletionRecord, document) is None
+        assert (
+            session.scalars(
+                select(TaskRecord).where(TaskRecord.payload_ref == document)
+            ).all()
+            == []
+        )
 
 
 @pytest.mark.integration

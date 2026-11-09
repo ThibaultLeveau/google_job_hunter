@@ -39,7 +39,7 @@ function uploadError(error: unknown) {
   if (error instanceof ApiError) {
     if (error.status === 413) return 'This file exceeds your workspace upload limit. Choose a smaller file.';
     if (error.status === 415) return 'The file content is not supported. Choose a valid PDF, DOCX or UTF-8 TXT.';
-    if (error.status === 409) return 'Your document quota was reached, or these exact bytes were previously deleted. Contact your workspace administrator.';
+    if (error.status === 409) return 'Your document quota was reached, or deletion of this file is still in progress. Wait for deletion to finish before uploading again.';
   }
   return 'Upload could not be confirmed. Your selection is kept. Try again; identical bytes reuse the existing document.';
 }

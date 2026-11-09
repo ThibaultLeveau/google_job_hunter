@@ -76,6 +76,7 @@ test.each([413, 415, 409, 503])('shows safe upload error %i and explicitly retri
   let calls = 0; server.use(http.post(base, () => ++calls === 1 ? failure(status) : HttpResponse.json(document)));
   const user = userEvent.setup(); mount(); await user.upload(picker(), new File(['a'], 'a.txt')); await user.click(uploadButton());
   expect(await screen.findByRole('alert')).not.toHaveTextContent('Private server message');
+  if (status === 409) expect(screen.getByRole('alert')).toHaveTextContent('deletion of this file is still in progress');
   expect(screen.getByText('Selected: a.txt')).toBeVisible(); expect(calls).toBe(1);
   await user.click(screen.getByRole('button', { name: 'Retry upload' })); expect(await screen.findByText(/already exists/)).toBeVisible(); expect(calls).toBe(2);
 });
