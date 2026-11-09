@@ -206,11 +206,19 @@ class AI:
         source: str,
         schema: type[T],
         schema_version: str,
+        validate_output: Callable[[T], None] | None = None,
     ) -> Result[T]:
         definition = schema.model_json_schema()
         encoded_schema = json.dumps(definition, ensure_ascii=False, sort_keys=True)
         envelope = json.dumps({"untrusted_source": source}, ensure_ascii=False)
         records: list[Record] = []
+
+        def validate(data: object) -> T:
+            value = schema.model_validate(data)
+            if validate_output is not None:
+                validate_output(value)
+            return value
+
         for attempt in (1, 2):
             instruction = GUARD + prompt.instruction + (REPAIR if attempt == 2 else "")
             # UTF-8 bytes bound byte-BPE tokens; reserve extra framing/schema overhead.
@@ -232,7 +240,7 @@ class AI:
                 return await self.chat.generate(instruction, envelope, definition)
 
             try:
-                value, record = self.call(call, generate, schema.model_validate)
+                value, record = self.call(call, generate, validate)
                 records.append(record)
                 return Result(value, tuple(records))
             except AIError as error:
