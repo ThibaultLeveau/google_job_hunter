@@ -824,6 +824,7 @@ source window: unique matches can be relocated, while repeated skill quotes reta
 Grouped skill-name fields become separate candidates, each subject to full evidence validation.
 Profile evidence checks use the same two-call ceiling as schema repair; invalid evidence is never published.
 Ambiguous employment/project quotes and absent quotes fail. Already valid positions remain unchanged.
+Unsupported date precision becomes unknown with uncertain, validated source evidence; no day is inferred.
 Sentence-final periods followed by whitespace/end are punctuation; partial tokens such as `C`
 in `C++` still fail. Unsupported values fail; source presence does not prove factual truth.
 Only exact normalized skills merge evidence; similarly named employment/projects remain separate.

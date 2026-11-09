@@ -33,7 +33,8 @@ PROMPT = Prompt(
         "Never join text parts, reconstruct paragraphs, summarize or rephrase. "
         "Every non-null value needs evidence with an exact matching quote. "
         "Missing values are null, missing uncertainty, no evidence. Ambiguous values "
-        "are null with uncertain evidence. Dates require YYYY-MM-DD; no guessing. "
+        "are null with uncertain evidence. Dates require a literal YYYY-MM-DD quote; "
+        "a year or month alone means null, never invent a day or normalize a date. "
         "Ongoing is boolean only for a literal true/false quote; otherwise null. "
         "Preserve language. Similar names do not establish identical records."
     ),

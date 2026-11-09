@@ -80,9 +80,26 @@ def locate_evidence(candidate: Candidate, window: list[TextSegment]) -> Candidat
                 span.model_copy(update={"start": start, "end": start + len(span.quote)})
                 for start in sorted(positions)
             )
-        fields.append(
-            ProposedField.model_validate({**field.model_dump(), "evidence": evidence})
+        resolved = ProposedField.model_validate(
+            {**field.model_dump(), "evidence": evidence}
         )
+        if (
+            field.name in {"start_date", "end_date"}
+            and field.value is not None
+            and evidence
+        ):
+            try:
+                calendar_date(field.value)
+                if any(
+                    normalized(str(field.value)) != normalized(span.quote)
+                    for span in evidence
+                ):
+                    raise ValueError("Unsupported date precision.")
+            except ValueError:
+                resolved = resolved.model_copy(
+                    update={"value": None, "uncertainty": "uncertain"}
+                )
+        fields.append(resolved)
     return candidate.model_copy(update={"fields": fields})
 
 

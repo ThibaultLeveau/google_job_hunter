@@ -486,3 +486,27 @@ def test_grouped_skill_names_become_separate_validated_candidates() -> None:
     )
     with pytest.raises(AIError, match="invalid_output"):
         stage(Batch(candidates=[bad]).model_dump_json()).execute(parsed)
+
+
+@pytest.mark.parametrize(
+    "quote,value",
+    [
+        ("2020", "2020-01-01"),
+        ("2020", "2020"),
+        ("2020-02-30", "2020-02-30"),
+        ("2020-01-01", "2020-01-01"),
+    ],
+)
+def test_unsupported_date_precision_remains_unknown(quote: str, value: str) -> None:
+    parsed = parse(BytesIO(("Acme " + quote).encode()), "text/plain", ParseLimits())
+    row = candidate(
+        parsed,
+        "experience",
+        {"company": ("Acme", "Acme", 0), "start_date": (value, quote, 0)},
+    )
+    result = stage(Batch(candidates=[row]).model_dump_json()).execute(parsed)
+    field = next(f for f in result.candidates[0].fields if f.name == "start_date")
+    assert field.value == (value if quote == "2020-01-01" else None)
+    assert field.uncertainty == ("explicit" if field.value else "uncertain")
+    assert field.evidence[0].quote == quote
+    validate_evidence(result.candidates[0], list(parsed.segments))
