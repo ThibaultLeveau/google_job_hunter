@@ -17,6 +17,7 @@ from test_job_registry import owners as registry_owners
 from test_job_registry import runs as registry_runs
 from test_snapshots import page, publish, register
 
+from job_hunter.application.ai import Limits
 from job_hunter.application.job_metadata import ExtractedMetadata, ExtractMetadata
 from job_hunter.domain.errors import DomainError
 from job_hunter.domain.job_metadata import (
@@ -26,6 +27,7 @@ from job_hunter.domain.job_metadata import (
     Metadata,
     Salary,
     Selection,
+    locate_citation,
 )
 from job_hunter.domain.preparation import Preparation
 from job_hunter.infrastructure.ai import AISettings
@@ -37,6 +39,11 @@ from job_hunter.infrastructure.job_metadata import (
     create_metadata,
 )
 from job_hunter.infrastructure.preparation import PostgresPreparation
+from job_hunter.infrastructure.requirements import (
+    PostgresRequirements,
+    RequirementsCallRecord,
+    create_requirements,
+)
 from job_hunter.settings import Settings
 
 owners, runs = registry_owners, registry_runs
@@ -133,6 +140,196 @@ def test_langchain_complete_source_language_restrictions_and_salary() -> None:
     )
     assert len(requests) == 1 and result.accounting[0]["input_tokens"] == 30
     assert "execute shell" not in json.dumps(result.accounting)
+
+
+@pytest.mark.parametrize("outcome", ["ready", "ambiguous", "failed"])
+def test_long_source_analysis_preserves_late_facts_with_bounded_calls(
+    outcome: str,
+) -> None:
+    source = prepared(
+        "\n".join(f"Engineer position {i}: " + "detail " * 20 for i in range(85))
+    )
+    requests: list[object] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        parts = json.loads(
+            json.loads(body["messages"][1]["content"])["untrusted_source"]
+        )
+        requests.extend(parts)
+        evidence = cite(source, parts[0]["text"])
+        value = Selection(kind="job", evidence=[evidence], facts=[], salaries=[])
+        if any(p["id"] == str(source.paragraphs[-1].id) for p in parts):
+            value = value.model_copy(
+                update={
+                    "facts": [
+                        Fact(
+                            field="title",
+                            value=source.paragraphs[-1].text,
+                            uncertain=False,
+                            evidence=cite(source, source.paragraphs[-1].text),
+                        )
+                    ]
+                }
+            )
+            if outcome == "ambiguous":
+                value = value.model_copy(update={"kind": "non_job", "facts": []})
+            elif outcome == "failed":
+                value = value.model_copy(
+                    update={"evidence": [cite(source, source.paragraphs[0].text)]}
+                )
+        return httpx.Response(
+            200,
+            json=completion(json.dumps({"selection": value.model_dump(mode="json")})),
+        )
+
+    result = ExtractMetadata(
+        lambda ledger: service(httpx.MockTransport(respond), ledger), "long-source"
+    ).execute(source)
+    assert result.content.state == outcome
+    if outcome == "ready":
+        assert (
+            result.content.fields["title"].values[0].value == source.paragraphs[-1].text
+        )
+    elif outcome == "failed":
+        assert (
+            result.content.reason == "invalid_output"
+            and not result.content.selection.facts
+        )
+    assert len(requests) >= len(source.paragraphs)
+    assert 1 < len(result.accounting) <= 32
+
+
+def test_exact_quotes_recover_offsets_before_bounded_evidence_repair() -> None:
+    source = prepared(TEXT)
+    chosen = selection(source)
+    fact = chosen.facts[0]
+    chosen = chosen.model_copy(
+        update={
+            "facts": [
+                fact.model_copy(
+                    update={
+                        "evidence": fact.evidence.model_copy(
+                            update={"start": 999, "end": 1000}
+                        )
+                    }
+                )
+            ]
+        }
+    )
+    result = extractor(chosen).execute(source)
+    assert result.content.state == "ready"
+    assert result.content.fields["title"].values[0].evidence == cite(source, fact.value)
+
+
+@pytest.mark.parametrize("repair", [True, False])
+def test_semantic_failure_uses_only_one_accounted_repair(repair: bool) -> None:
+    source = prepared(TEXT)
+    chosen, calls = selection(source), []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        value = (
+            chosen
+            if repair and len(calls) == 2
+            else chosen.model_copy(update={"evidence": []})
+        )
+        return httpx.Response(
+            200,
+            json=completion(json.dumps({"selection": value.model_dump(mode="json")})),
+        )
+
+    result = ExtractMetadata(
+        lambda ledger: service(httpx.MockTransport(respond), ledger), "repair"
+    ).execute(source)
+    assert result.content.state == ("ready" if repair else "failed")
+    assert len(calls) == len(result.accounting) == 2
+    assert result.accounting[0]["error"] == "invalid_output"
+    assert result.accounting[1]["error"] == (None if repair else "invalid_output")
+
+
+def test_ambiguous_quote_never_moves_to_another_occurrence_or_paragraph() -> None:
+    source = prepared("Remote but not Remote\nRemote")
+    evidence = cite(source, "Remote")
+    assert locate_citation(source, evidence) == evidence
+    with pytest.raises(ValueError, match="one exact match"):
+        locate_citation(source, evidence.model_copy(update={"start": 999, "end": 1000}))
+    with pytest.raises(ValueError, match="one exact match"):
+        locate_citation(source, evidence.model_copy(update={"quote": "Invented"}))
+
+
+def test_window_limit_rejects_before_any_provider_call() -> None:
+    source = prepared("\n".join("Detail " * 500 for _ in range(24)))
+    stage = create_metadata(
+        AISettings(
+            provider="fixture", environment="test", limits=Limits(input_tokens=10000)
+        ),
+        "{}",
+    )
+    result = stage.execute(source)
+    assert result.content.reason == "input_limit" and not result.accounting
+
+
+@pytest.mark.integration
+def test_multiple_sections_publish_all_call_records_atomically(
+    isolated_database: Database, owners: tuple[UUID, UUID], runs: tuple[UUID, UUID]
+) -> None:
+    job = register(isolated_database, owners[0], runs[0])
+    snapshot = publish(
+        isolated_database,
+        job,
+        replace(
+            page(body=("Job paragraph " * 100 + "\n").encode() * 30),
+            content_type="text/plain",
+        ),
+    )
+    row = PostgresPreparation(isolated_database).run(snapshot.id)
+    source = Preparation.model_validate(row.payload)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        parts = json.loads(
+            json.loads(body["messages"][1]["content"])["untrusted_source"]
+        )
+        part = next(p for p in source.paragraphs if str(p.id) == parts[0]["id"])
+        value = Selection(
+            kind="ambiguous",
+            evidence=[
+                Citation(
+                    paragraph_id=part.id,
+                    start=part.start,
+                    end=part.start + 3,
+                    quote="Job",
+                )
+            ],
+            facts=[],
+            salaries=[],
+        )
+        return httpx.Response(
+            200,
+            json=completion(json.dumps({"selection": value.model_dump(mode="json")})),
+        )
+
+    stage = ExtractMetadata(
+        lambda ledger: service(httpx.MockTransport(respond), ledger), "sections"
+    )
+    repository = PostgresMetadata(isolated_database, stage)
+    result = repository.run(row.id)
+    assert result.payload["state"] == "ambiguous"
+    with isolated_database.transaction() as session:
+        calls = session.scalar(select(func.count()).select_from(MetadataCallRecord))
+        assert calls is not None and 2 < calls <= 32
+    assert repository.run(row.id).id == result.id
+    requirements = PostgresRequirements(
+        isolated_database,
+        create_requirements(
+            AISettings(provider="fixture", environment="test"), '{"items": []}'
+        ),
+    )
+    assert requirements.run(result.id).payload["state"] == "unknown"
+    with isolated_database.transaction() as session:
+        calls = session.scalar(select(func.count()).select_from(RequirementsCallRecord))
+        assert calls is not None and 2 < calls <= 32
 
 
 @pytest.mark.parametrize(
@@ -253,7 +450,6 @@ def test_unknowns_conflicts_and_classification(case: str) -> None:
     [
         "quote",
         "paragraph",
-        "offset",
         "value",
         "amount",
         "currency",
@@ -298,11 +494,10 @@ def test_invented_evidence_and_values_fail_without_listing(fault: str) -> None:
         chosen = chosen.model_copy(update={"kind": "non_job"})
     result = extractor(chosen).execute(source)
     assert (
-        result.content.state == "failed"
-        and result.content.reason == "unverified_evidence"
+        result.content.state == "failed" and result.content.reason == "invalid_output"
     )
     assert all(f.status == "unknown" for f in result.content.fields.values())
-    assert not result.content.selection.salaries and len(result.accounting) == 1
+    assert not result.content.selection.salaries and len(result.accounting) == 2
 
 
 def test_malformed_output_input_limits_and_source_classification() -> None:
@@ -340,7 +535,7 @@ def test_salary_does_not_reinterpret_signed_percentage_or_shorthand_values(
             )
         ],
     )
-    assert extractor(chosen).execute(source).content.reason == "unverified_evidence"
+    assert extractor(chosen).execute(source).content.reason == "invalid_output"
 
 
 @pytest.mark.integration

@@ -1115,9 +1115,11 @@ Only HTTP/80 and HTTPS/443 are permitted. Credentials, ambiguous address forms, 
 answers, mapped/transition IPv6 and unsafe redirects fail closed. Azure's special
 [WireServer IP](https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16)
 is explicitly blocked too. Async DNS queries both address
-families without search suffixes; every answer is validated and the connection uses one validated IP.
+families without search suffixes; every answer is validated before any connection. Failed TCP
+connections fall back through the same pinned address set within one shared connect deadline,
+so an unavailable IPv6 route does not prevent IPv4 access. HTTP requests are never replayed on fallback.
 HTTP Host, TLS SNI and certificate verification retain the original hostname. Each hop revalidates
-DNS; there is no address fallback, transport retry, automatic redirect, proxy or cookie jar.
+DNS; there is no transport retry, automatic redirect, proxy or cookie jar.
 HTTPCore handles HTTP/TLS; gzip decoding has separate wire/body limits and rejects truncated or
 concatenated streams. Other content encodings are unsupported. Returned bytes remain untrusted.
 
@@ -1311,11 +1313,18 @@ production uses configured providers. This issue adds no job API, private matchi
 ### Source-verified job metadata
 
 Issue #49 adds `ExtractMetadata` and `PostgresMetadata`, composed by `create_metadata`.
-The bounded typed LangChain call receives every preserved preparation paragraph, including its
-identity and global Unicode offsets. AI-cleaned display text is not a factual input. Inputs that
-exceed the configured AI bound fail explicitly; source text is never silently truncated.
+Bounded typed LangChain calls receive every preserved preparation paragraph, including its
+identity and global Unicode offsets, in at most 16 sections sized to the configured input bound.
+Each section allows one repair, for at most 32 accounted calls per stage. Input sizing includes
+the schema, guard, JSON envelope and repair instruction; redundant paragraph hashes are omitted.
+Paragraphs remain intact; an oversized paragraph or more than 16 sections fails before any call.
+AI-cleaned display text is not a factual input; source text is never silently truncated.
 Exact citations and complete-token values are checked against the immutable preparation. Fields
 carry known, unknown, ambiguous or conflicting status; multiple locations/skills remain separate.
+Incorrect offsets can resolve only to a unique exact quote in the named paragraph of that section.
+Evidence and semantic validation run inside the bounded repair attempt; invented or ambiguous
+evidence remains invalid. Differing section classifications produce an ambiguous page classification.
+All section results must validate before publication; aggregate fact/salary limits still apply.
 Work arrangement and geographic eligibility are distinct. Conservative arrangement normalization
 retains unknown for unsupported or negated wording; original-language claims and evidence remain.
 Salary alternatives preserve source text, explicit amounts, ISO currency, period and gross/net basis.
@@ -1332,12 +1341,17 @@ This internal stage adds no job endpoint, requirements extraction or derived sal
 ### Full application requirements and bounded summaries
 
 Issue #50 adds `ExtractRequirements` and `PostgresRequirements`, composed by `create_requirements`.
-Extraction receives the complete preserved source alongside verified metadata, independently of
-AI cleanup. Each atomic item keeps exact citations, a stable UUID, full original-language text,
+Extraction receives every preserved source paragraph in the same bounded sections alongside the
+verified metadata classification and source hash, independently of AI cleanup. Each atomic item
+keeps exact citations, a stable UUID, full original-language text,
 required/preferred/unclear priority and its job-condition/material/instruction/deadline category.
 Explicit English priority cues are validated; unsupported or ambiguous wording stays unclear.
 Contradictory items remain separate. Missing requirements yield unknown; unavailable or failed
 inputs have separate states and never imply eligibility. Calls and response sizes remain bounded.
+Missing section context stays unclear. Any failed section rejects the entire result; partial
+requirements are never published as complete. The v2 analysis prompts create new artifact revisions;
+worker startup schedules missing analysis revisions while preserving existing source snapshots.
+Existing exhausted crawls require the normal authorized retry after deploying the fetch fix.
 
 The plain-text summary is at most 600 Unicode characters, prioritizes required items and includes
 only complete items. `more_requirements` counts every item absent from that summary. Even if the

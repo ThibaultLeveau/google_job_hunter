@@ -1,9 +1,13 @@
 import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from typing import Literal
+from uuid import UUID
 
 from job_hunter.application.ai import (
     AI,
+    GUARD,
+    REPAIR,
     Accounting,
     AIError,
     Call,
@@ -11,13 +15,94 @@ from job_hunter.application.ai import (
     Prompt,
     Record,
 )
-from job_hunter.domain.job_metadata import Metadata, Selection, materialize
-from job_hunter.domain.preparation import Preparation, digest
+from job_hunter.domain.job_metadata import (
+    Metadata,
+    Selection,
+    locate_citation,
+    materialize,
+)
+from job_hunter.domain.preparation import Paragraph, Preparation, digest
+
+MAX_ANALYSIS_CALLS = 32
+
+
+def source_windows(
+    source: Preparation,
+    ai: AI,
+    prompt: Prompt,
+    schema: type[Output],
+    metadata: Metadata | None = None,
+) -> list[tuple[tuple[Paragraph, ...], str]]:
+    overhead = (
+        len(
+            (
+                GUARD
+                + prompt.instruction
+                + REPAIR
+                + json.dumps(
+                    schema.model_json_schema(), ensure_ascii=False, sort_keys=True
+                )
+            ).encode()
+        )
+        + 1024
+    )
+
+    def encode(parts: list[Paragraph]) -> tuple[str, int]:
+        values = [p.model_dump(mode="json", exclude={"content_hash"}) for p in parts]
+        payload = json.dumps(
+            values
+            if metadata is None
+            else {
+                "source": values,
+                "metadata": {
+                    "state": metadata.state,
+                    "source_hash": metadata.source_hash,
+                },
+            },
+            ensure_ascii=False,
+        )
+        return payload, overhead + len(
+            json.dumps({"untrusted_source": payload}, ensure_ascii=False).encode()
+        )
+
+    windows: list[tuple[tuple[Paragraph, ...], str]] = []
+    parts: list[Paragraph] = []
+    for part in source.paragraphs:
+        if encode([*parts, part])[1] > ai.limits.input_tokens:
+            if parts:
+                windows.append((tuple(parts), encode(parts)[0]))
+            parts = []
+            if encode([part])[1] > ai.limits.input_tokens:
+                raise AIError("input_limit")
+        parts.append(part)
+    if parts:
+        windows.append((tuple(parts), encode(parts)[0]))
+    if len(windows) > MAX_ANALYSIS_CALLS // 2:
+        raise AIError("input_limit")
+    return windows
+
+
+def resolved_selection(source: Preparation, candidate: Selection) -> Selection:
+    return candidate.model_copy(
+        update={
+            "evidence": [locate_citation(source, e) for e in candidate.evidence],
+            "facts": [
+                f.model_copy(update={"evidence": locate_citation(source, f.evidence)})
+                for f in candidate.facts
+            ],
+            "salaries": [
+                s.model_copy(update={"evidence": locate_citation(source, s.evidence)})
+                for s in candidate.salaries
+            ],
+        }
+    )
+
 
 PROMPT = Prompt(
-    version="job-metadata-v1",
+    version="job-metadata-v2",
     instruction=(
-        "Classify the complete source as job, non_job or ambiguous, with citations. "
+        "Classify this source section as job, non_job or ambiguous, with citations. "
+        "A section without listing context is ambiguous, not proof of a non-job page. "
         "Extract title, employer, skills, region, location, employment_type, "
         "seniority, language, work_arrangement and geographic_eligibility separately. "
         "Facts copy "
@@ -44,7 +129,7 @@ class MetadataTrace(Accounting):
         self.records: list[Record] = []
 
     def reserve(self, call: Call) -> None:
-        if self.calls >= 2:
+        if self.calls >= MAX_ANALYSIS_CALLS:
             raise ValueError("Metadata call budget exhausted.")
         self.calls += 1
 
@@ -74,21 +159,48 @@ class ExtractMetadata:
             reason = "source_unavailable"
         else:
             try:
-                candidate = (
-                    self.factory(trace)
-                    .extract(
+                ai, selections = self.factory(trace), []
+                for window, payload in source_windows(source, ai, PROMPT, Batch):
+                    window_ids = {part.id for part in window}
+
+                    def validate_output(
+                        batch: Batch, window_ids: set[UUID] = window_ids
+                    ) -> None:
+                        candidate = resolved_selection(source, batch.selection)
+                        spans = [
+                            *candidate.evidence,
+                            *(f.evidence for f in candidate.facts),
+                            *(s.evidence for s in candidate.salaries),
+                        ]
+                        if any(e.paragraph_id not in window_ids for e in spans):
+                            raise ValueError("Evidence outside supplied section.")
+                        materialize(source, candidate, self.version)
+
+                    result = ai.extract(
                         PROMPT,
-                        json.dumps(
-                            [
-                                part.model_dump(mode="json")
-                                for part in source.paragraphs
-                            ],
-                            ensure_ascii=False,
-                        ),
+                        payload,
                         Batch,
                         "job-metadata-v1",
+                        validate_output,
                     )
-                    .value.selection
+                    selections.append(
+                        resolved_selection(source, result.value.selection)
+                    )
+                kinds = {s.kind for s in selections}
+                kind: Literal["job", "non_job", "ambiguous"] = (
+                    "job"
+                    if kinds == {"job"}
+                    else "non_job"
+                    if kinds == {"non_job"}
+                    else "ambiguous"
+                )
+                candidate = Selection(
+                    kind=kind,
+                    evidence=[e for s in selections for e in s.evidence][:4],
+                    facts=[f for s in selections for f in s.facts],
+                    salaries=[
+                        s for selection in selections for s in selection.salaries
+                    ],
                 )
                 materialize(source, candidate, self.version)
                 selection = candidate

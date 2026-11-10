@@ -143,9 +143,18 @@ async def resolve_public(host: str, timeout: float) -> tuple[str, ...]:
 
 class PinnedBackend(httpcore.AsyncNetworkBackend):
     def __init__(
-        self, host: str, port: int, address: str, backend: httpcore.AsyncNetworkBackend
+        self,
+        host: str,
+        port: int,
+        addresses: tuple[str, ...],
+        backend: httpcore.AsyncNetworkBackend,
     ) -> None:
-        self.host, self.port, self.address, self.backend = host, port, address, backend
+        self.host, self.port, self.addresses, self.backend = (
+            host,
+            port,
+            addresses,
+            backend,
+        )
 
     async def connect_tcp(
         self,
@@ -157,9 +166,21 @@ class PinnedBackend(httpcore.AsyncNetworkBackend):
     ) -> httpcore.AsyncNetworkStream:
         if (host, port) != (self.host, self.port):
             raise FetchError("unsafe_address")
-        return await self.backend.connect_tcp(
-            self.address, port, timeout, local_address, socket_options
-        )
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        for index, address in enumerate(self.addresses):
+            remaining = max(0, deadline - time.monotonic()) if deadline else None
+            # Share one connect budget across all validated addresses.
+            allowance = (
+                remaining / (len(self.addresses) - index) if remaining else remaining
+            )
+            try:
+                return await self.backend.connect_tcp(
+                    address, port, allowance, local_address, socket_options
+                )
+            except httpcore.ConnectError, httpcore.ConnectTimeout:
+                if index == len(self.addresses) - 1:
+                    raise
+        raise httpcore.ConnectError("No validated addresses.")
 
 
 class HttpFetcher:
@@ -184,7 +205,7 @@ class HttpFetcher:
         except ValueError, TypeError, OverflowError, UnicodeError:
             return None
 
-    async def destination(self, url: httpx.URL) -> str:
+    async def destination(self, url: httpx.URL) -> tuple[str, ...]:
         host = url.raw_host.decode("ascii")
         try:
             ipaddress.ip_address(host)
@@ -195,7 +216,7 @@ class HttpFetcher:
         if not 1 <= len(answers) <= 64:
             raise FetchError("dns")
         addresses = tuple(public_address(answer) for answer in answers)
-        return addresses[0]
+        return tuple(dict.fromkeys(addresses))
 
     def fetch(self, request: FetchRequest) -> FetchResponse:
         deadline = time.monotonic() + self.settings.total_seconds
