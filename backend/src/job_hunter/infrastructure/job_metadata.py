@@ -4,7 +4,11 @@ from sqlalchemy import CheckConstraint, ForeignKey, String, UniqueConstraint, se
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from job_hunter.application.job_metadata import ExtractedMetadata, ExtractMetadata
+from job_hunter.application.job_metadata import (
+    MAX_ANALYSIS_CALLS,
+    ExtractedMetadata,
+    ExtractMetadata,
+)
 from job_hunter.domain.errors import DomainError
 from job_hunter.domain.job_metadata import materialize
 from job_hunter.domain.preparation import Preparation
@@ -80,7 +84,7 @@ class PostgresMetadata:
                 self.extractor.version,
                 result.content.reason,
             )
-            or len(result.accounting) > 2
+            or len(result.accounting) > MAX_ANALYSIS_CALLS
         ):
             raise ValueError("Invalid metadata provenance or call budget.")
         for record in result.accounting:

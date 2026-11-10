@@ -59,6 +59,66 @@ def service(fixture: FixtureHTTP, settings: FetchSettings | None = None) -> Http
     return HttpFetcher(settings or FetchSettings(), fixture.resolve, fixture)
 
 
+@pytest.mark.parametrize("failure", [httpcore.ConnectError, httpcore.ConnectTimeout])
+def test_unreachable_first_address_falls_back_without_resolving_again(
+    monkeypatch: pytest.MonkeyPatch, failure: type[Exception]
+) -> None:
+    addresses = ("2606:4700:4700::1111", "93.184.216.34")
+    fixture = FixtureHTTP({URL: http_response()}, addresses)
+    original = fixture.connect_tcp
+    attempted: list[str] = []
+
+    async def connect(
+        host: str, port: int, timeout: float | None = None, *args: object
+    ) -> httpcore.AsyncNetworkStream:
+        attempted.append(host)
+        if host == addresses[0]:
+            fixture.addresses = ("127.0.0.1",)
+            raise failure("unreachable")
+        return await original(host, port, timeout)
+
+    monkeypatch.setattr(fixture, "connect_tcp", connect)
+    assert service(fixture).fetch(FetchRequest(URL)).body == b"public job"
+    assert attempted == list(addresses) and fixture.dns == ["jobs.example.org"]
+    assert fixture.tls == ["jobs.example.org"] and len(fixture.requests) == 1
+
+
+def test_address_fallback_shares_connect_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = FixtureHTTP({})
+    elapsed = [10.0]
+    timeouts: list[float] = []
+    monkeypatch.setattr(
+        "job_hunter.infrastructure.fetching.time.monotonic", lambda: elapsed[0]
+    )
+
+    async def connect(
+        host: str, port: int, timeout: float | None = None, *args: object
+    ) -> httpcore.AsyncNetworkStream:
+        assert timeout is not None
+        timeouts.append(timeout)
+        elapsed[0] += timeout
+        raise httpcore.ConnectTimeout()
+
+    monkeypatch.setattr(fixture, "connect_tcp", connect)
+    backend = PinnedBackend(
+        "jobs.example.org", 443, ("2606:4700:4700::1111", "93.184.216.34"), fixture
+    )
+    with pytest.raises(httpcore.ConnectTimeout):
+        asyncio.run(backend.connect_tcp("jobs.example.org", 443, 5))
+    assert timeouts == [2.5, 2.5] and elapsed[0] == 15
+
+
+def test_http_failure_never_replays_on_another_address() -> None:
+    fixture = FixtureHTTP(
+        {URL: http_response(status=503)}, ("2606:4700:4700::1111", "93.184.216.34")
+    )
+    with pytest.raises(FetchError, match="http_status"):
+        service(fixture).fetch(FetchRequest(URL))
+    assert len(fixture.connections) == len(fixture.requests) == 1
+
+
 @pytest.mark.parametrize(
     "host",
     """
@@ -144,7 +204,10 @@ def test_pinned_address_preserves_tls_host_and_ignores_ambient_proxies(
         result.url == URL and result.body == b"public job" and result.wire_bytes == 10
     )
     assert result.content_type is None and result.redirect is None
-    assert fixture.connections == [("93.184.216.34", 443, 5)]
+    assert len(fixture.connections) == 1
+    host, port, timeout = fixture.connections[0]
+    assert (host, port) == ("93.184.216.34", 443)
+    assert timeout is not None and 4.9 < timeout <= 5
     assert fixture.tls == ["jobs.example.org"] and len(fixture.dns) == 1
     request = fixture.requests[0].lower()
     assert b"host: jobs.example.org\r\n" in request
@@ -418,7 +481,7 @@ def test_settings_and_pinned_backend_reject_invalid_configuration(
     assert "secret-invalid" not in str(error.value)
     monkeypatch.delenv("JOB_HUNTER_FETCH_ALLOWED_PORTS")
     assert load_fetch_settings().max_redirects == 5
-    pinned = PinnedBackend("jobs.example.org", 443, "93.184.216.34", FixtureHTTP({}))
+    pinned = PinnedBackend("jobs.example.org", 443, ("93.184.216.34",), FixtureHTTP({}))
     with pytest.raises(FetchError, match="unsafe_address"):
         asyncio.run(pinned.connect_tcp("other.example.org", 443))
 

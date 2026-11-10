@@ -5,6 +5,7 @@ from sqlalchemy import CheckConstraint, ForeignKey, String, UniqueConstraint, se
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
+from job_hunter.application.job_metadata import MAX_ANALYSIS_CALLS
 from job_hunter.application.requirements import (
     ExtractedRequirements,
     ExtractRequirements,
@@ -100,7 +101,7 @@ class PostgresRequirements:
                 candidates,
                 result.content.reason,
             )
-            or len(result.accounting) > 2
+            or len(result.accounting) > MAX_ANALYSIS_CALLS
         ):
             raise ValueError("Invalid requirements provenance or call budget.")
         for record in result.accounting:

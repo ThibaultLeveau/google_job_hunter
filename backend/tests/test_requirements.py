@@ -216,8 +216,7 @@ def test_invalid_references_and_priority_changes_fail(fault: str) -> None:
         chosen.append(item(source, "CV is not optional", "preferred", "material"))
     result = extractor(chosen).execute(source, uuid4(), metadata(source))
     assert (
-        result.content.state == "failed"
-        and result.content.reason == "unverified_evidence"
+        result.content.state == "failed" and result.content.reason == "invalid_output"
     )
     assert result.content.items == [] and result.content.summary == ""
 
@@ -241,6 +240,53 @@ def test_unknown_empty_plain_text_and_revision_mismatch() -> None:
     )
     malformed = create_requirements(FIXTURE, '{"items": [], "html": "<b>fake</b>"}')
     assert malformed.execute(source, uuid4(), meta).content.reason == "invalid_output"
+
+
+@pytest.mark.parametrize("invalid_last", [False, True])
+def test_long_source_keeps_late_requirements_or_rejects_partial_results(
+    invalid_last: bool,
+) -> None:
+    source = prepared(
+        "\n".join(f"Context {i}: " + "detail " * 25 for i in range(100))
+        + "\nPython is required"
+    )
+    seen: set[str] = set()
+    attempts = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        body = json.loads(request.content)
+        parts = json.loads(
+            json.loads(body["messages"][1]["content"])["untrusted_source"]
+        )["source"]
+        seen.update(p["id"] for p in parts)
+        chosen = item(source, parts[0]["text"])
+        if any(p["id"] == str(source.paragraphs[-1].id) for p in parts):
+            attempts += 1
+            chosen = item(source, "Python is required", "required")
+            evidence = chosen.evidence[0].model_copy(update={"start": 0, "end": 1})
+            chosen = chosen.model_copy(
+                update={
+                    "evidence": [evidence],
+                    "text": "Invented" if invalid_last else chosen.text,
+                }
+            )
+        return httpx.Response(
+            200,
+            json=completion(json.dumps({"items": [chosen.model_dump(mode="json")]})),
+        )
+
+    result = ExtractRequirements(
+        lambda ledger: service(httpx.MockTransport(respond), ledger), "long"
+    ).execute(source, uuid4(), metadata(source))
+    assert seen == {str(p.id) for p in source.paragraphs}
+    assert 1 < len(result.accounting) <= 32
+    if invalid_last:
+        assert result.content.state == "failed" and not result.content.items
+        assert attempts == 2
+    else:
+        assert result.content.state == "ready" and attempts == 1
+        assert result.content.items[-1].evidence == [cite(source, "Python is required")]
 
 
 @pytest.mark.parametrize(
@@ -268,7 +314,7 @@ def test_priority_evidence_preserves_qualifying_context(case: str) -> None:
         "ready" if case in {"valid_heading", "mixed_clauses"} else "failed"
     )
     if result.state == "failed":
-        assert result.reason == "unverified_evidence" and not result.items
+        assert result.reason == "invalid_output" and not result.items
 
 
 @pytest.mark.integration

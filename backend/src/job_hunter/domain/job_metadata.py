@@ -115,6 +115,25 @@ def citation(source: Preparation, evidence: Citation) -> str:
     return part.text
 
 
+def locate_citation(source: Preparation, evidence: Citation) -> Citation:
+    part = next((p for p in source.paragraphs if p.id == evidence.paragraph_id), None)
+    if part is None:
+        raise ValueError("Unknown evidence paragraph.")
+    try:
+        citation(source, evidence)
+        return evidence
+    except ValueError:
+        start = part.text.find(evidence.quote)
+        if start < 0 or part.text.find(evidence.quote, start + 1) >= 0:
+            raise ValueError(
+                "Evidence must have one exact match in its paragraph."
+            ) from None
+        start += part.start
+        return evidence.model_copy(
+            update={"start": start, "end": start + len(evidence.quote)}
+        )
+
+
 def salary(source: Preparation, claim: Salary) -> None:
     citation(source, claim.evidence)
     quote = claim.evidence.quote
